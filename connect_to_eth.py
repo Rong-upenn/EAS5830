@@ -29,23 +29,23 @@ def connect_with_middleware(contract_json):
 
 	# Use your BNB testnet provider URL
 	bsc_testnet_url = "https://data-seed-prebsc-1-s1.binance.org:8545/"  # BNB testnet URL
-  w3 = Web3(HTTPProvider(bsc_testnet_url))
+	w3 = Web3(HTTPProvider(bsc_testnet_url))
 
-  # Inject middleware for BNB PoA consensus mechanism
-  w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+  	# Inject middleware for BNB PoA consensus mechanism
+  	w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
-  # Assert the connection to BNB testnet
-  assert w3.is_connected(), f"Failed to connect to provider at {url}"
-  print("Successfully connected to BNB Testnet!")
+  	# Assert the connection to BNB testnet
+  	assert w3.is_connected(), f"Failed to connect to provider at {url}"
+  	print("Successfully connected to BNB Testnet!")
 
-  # Create a contract object using the ABI and contract address
-  contract = w3.eth.contract(address=address, abi=abi)
+  	# Create a contract object using the ABI and contract address
+  	contract = w3.eth.contract(address=address, abi=abi)
 
 	return w3, contract
 
 
 if __name__ == "__main__":
- # Connect to Ethereum Mainnet
+  # Connect to Ethereum Mainnet
   w3_eth = connect_to_eth()
 
   # Connect to BNB Testnet and contract
