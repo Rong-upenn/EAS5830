@@ -15,16 +15,19 @@ def pin_to_ipfs(data):
         "pinata_api_key": PINATA_API_KEY,
         "pinata_secret_api_key": PINATA_SECRET_API_KEY,
     }
-    # pinJSONToIPFS requires {"pinataContent": <your dict>, ...}
+   
     payload = {
         "pinataContent": data,
         "pinataOptions": {"cidVersion": 1}
     }
 
     try:
+        # Pin file to IPFS
         resp = requests.post(PINATA_JSON_URL, headers=headers, json=payload, timeout=30)
         resp.raise_for_status()
+        # Parce the response and return the CID
         cid = resp.json().get("IpfsHash")
+        # Check if the request succeeded
         if not cid:
             raise RuntimeError("Pinata response missing 'IpfsHash'")
         return cid
@@ -36,9 +39,10 @@ def get_from_ipfs(cid, content_type="json"):
 
     url = f"{PINATA_GATEWAY}{cid}"
     try:
+        # Make a GET request
         resp = requests.get(url, timeout=30)
         resp.raise_for_status()
-        # Assignment assumes JSON content
+        # Parse the JSON content from the response
         data = resp.json() if content_type == "json" else json.loads(resp.text)
     except Exception as e:
         raise Exception(f"Failed to retrieve from IPFS: {e}")
@@ -47,7 +51,7 @@ def get_from_ipfs(cid, content_type="json"):
     return data
 
 if __name__ == "__main__":
-    # Simple sanity test (will succeed if your keys are valid)
+    # Simple sanity test 
     test_data = {"name": "Alice", "age": 15, "city": "Wonderland"}
     try:
         cid = pin_to_ipfs(test_data)
