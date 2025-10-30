@@ -4,7 +4,7 @@ import eth_account
 import os
 from eth_account import Account
 
-def sign_message(challenge, keyId=0, filename="secret_key.txt"):
+def sign_message(challenge, filename="secret_key.txt"):
     """
     challenge - byte string
     filename - filename of the file that contains your account secret key
@@ -17,45 +17,28 @@ def sign_message(challenge, keyId=0, filename="secret_key.txt"):
         key = f.readlines()
     assert(len(key) > 0), "Your account secret_key.txt is empty"
 
+    priv = key[0].strip()
+    if not priv.startswith("0x"):
+        priv = "0x" + priv
+        
     w3 = Web3()
     message = encode_defunct(challenge)
 
     # TODO recover your account information for your private key and sign the given challenge
     # Use the code from the signatures assignment to sign the given challenge
-    # Step 1: Load existing private keys or create the file if it doesn’t exist
-    if os.path.exists(filename):
-        with open(filename, "r") as f:
-            keys = f.read().splitlines()
-    else:
-        keys = []
+    # Load the first private key line, normalize to 0x-prefixed hex
+    
 
-    # Step 2: Check if private key for keyId exists; otherwise, generate and save a new one
-    if keyId >= len(keys):
-        # Generate a new account and save its private key
-        new_account = Account.create()
-        private_key = new_account.key.hex()
-        keys.append(private_key)
-        with open(filename, "a") as f:
-            f.write(private_key + "\n")
-    else:
-        # Retrieve the private key for the specified keyId
-        private_key = keys[keyId]
-
-    # Step 3: Create account from private key
-    acct = Account.from_key(private_key)
+    # Recover account from private key and sign the challenge
+    acct = Account.from_key(priv)
     eth_addr = acct.address
-
-    # Step 4: Sign the message
-    sig = acct.sign_message(message)
+    signed_message = acct.sign_message(message)
 
 
-
-
-
-    assert eth_account.Account.recover_message(message,signature=sig.signature) == eth_addr, f"Failed to sign message properly"
+    assert eth_account.Account.recover_message(message,signature=signed_message.signature.hex()) == eth_addr, f"Failed to sign message properly"
 
     #return signed_message, account associated with the private key
-    return sig, eth_addr
+    return signed_message, eth_addr
 
 
 if __name__ == "__main__":
