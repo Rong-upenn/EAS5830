@@ -4,7 +4,7 @@ import eth_account
 import os
 from eth_account import Account
 
-def sign_message(challenge, filename="secret_key.txt"):
+def sign_message(challenge, filename="sk.txt"):
     """
     challenge - byte string
     filename - filename of the file that contains your account secret key
