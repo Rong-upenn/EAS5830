@@ -141,10 +141,9 @@ def send_signed_msg(proof, random_leaf):
     contract_address, abi = get_contract_info(chain)
     w3 = connect_to(chain)
 
-    # TODO YOUR CODE HERE
     contract = w3.eth.contract(address=contract_address, abi=abi)
-    nonce = w3.eth.get_transaction_count(acct.address)
-    gas_price = w3.eth.gas_price
+    
+    # Build transaction
     tx = contract.functions.submit(proof, random_leaf).build_transaction({
         "from": acct.address,
         "nonce": w3.eth.get_transaction_count(acct.address),
@@ -152,8 +151,21 @@ def send_signed_msg(proof, random_leaf):
         "gasPrice": w3.to_wei("2", "gwei"),
         "chainId": 97,
     })
+    
+    # Sign the transaction
     signed_txn = w3.eth.account.sign_transaction(tx, private_key=acct.key)
-    tx_hash = w3.eth.send_raw_transaction(signed_txn.rawTransaction)
+    
+    # Handle different web3.py versions - try both possible attributes
+    if hasattr(signed_txn, 'rawTransaction'):
+        raw_tx = signed_txn.rawTransaction
+    elif hasattr(signed_txn, 'raw_transaction'):
+        raw_tx = signed_txn.raw_transaction
+    else:
+        # If neither attribute exists, try to access as a dictionary or use the hash
+        raw_tx = signed_txn
+    
+    # Send the raw transaction
+    tx_hash = w3.eth.send_raw_transaction(raw_tx)
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
     return tx_hash.hex()
 
