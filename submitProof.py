@@ -25,7 +25,8 @@ def merkle_assignment():
     tree = build_merkle(leaves)
 
     # Select a random leaf and create a proof for that leaf
-    random_leaf_index = 0 #TODO generate a random index from primes to claim (0 is already claimed)
+    random_leaf_index = random.randint(0, len(primes) - 1)
+    #TODO generate a random index from primes to claim (0 is already claimed)
     proof = prove_merkle(tree, random_leaf_index)
 
     # This is the same way the grader generates a challenge for sign_challenge()
@@ -137,16 +138,16 @@ def send_signed_msg(proof, random_leaf):
     chain = 'bsc'
 
     acct = get_account()
-    address, abi = get_contract_info(chain)
+    contract_address, abi = get_contract_info(chain)
     w3 = connect_to(chain)
 
     # TODO YOUR CODE HERE
-    contract = w3.eth.contract(address=address, abi=abi)
+    contract = w3.eth.contract(address=contract_address, abi=abi)
     nonce = w3.eth.get_transaction_count(acct.address)
     gas_price = w3.eth.gas_price
     tx = contract.functions.submit(proof, random_leaf).build_transaction({
-        "from": address,
-        "nonce": w3.eth.get_transaction_count(address),
+        "from": acct.address,
+        "nonce": w3.eth.get_transaction_count(acct.address),
         "gas": 250_000,
         "gasPrice": w3.to_wei("2", "gwei"),
         "chainId": 97,
