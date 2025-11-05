@@ -10,15 +10,13 @@ def _count_trailing_zero_bits(x: int) -> int:
 
 def mine_block(k: int, prev_hash: bytes, rand_lines: list[str]) -> bytes:
     """
-    Brute-force a nonce so that SHA256(prev_hash + rand_lines + nonce) has at least k trailing zero bits.
+        k - Number of trailing zeros in the binary representation (integer)
+        prev_hash - the hash of the previous block (bytes)
+        rand_lines - a set of "transactions," i.e., data to be included in this block (list of strings)
 
-    Args:
-        k: integer difficulty (number of required trailing zero bits, i.e., LSBs)
-        prev_hash: bytes, the previous block hash
-        rand_lines: list[str], transactions in-order (strings)
-
-    Returns:
-        nonce: bytes
+        Complete this function to find a nonce such that 
+        sha256( prev_hash + rand_lines + nonce )
+        has k trailing zeros in its *binary* representation
     """
     assert isinstance(prev_hash, (bytes, bytearray)), "prev_hash must be bytes"
     assert isinstance(k, int) and k >= 0, "k must be a non-negative integer"
@@ -47,16 +45,17 @@ def verify_nonce(k: int, prev_hash: bytes, rand_lines: list[str], nonce: bytes) 
     return int.from_bytes(h, "big") & mask == 0
 
 if __name__ == "__main__":
-    # Tiny self-test / demo: DO NOT use large k here, or it'll take very long.
+   
     import sys, time
-    k = 11 if len(sys.argv) < 2 else int(sys.argv[1])
-    prev_hash = hashlib.sha256(b"genesis").digest()
-    rand_lines = ["hello", "world", "transaction-1", "transaction-2"]
-    print(f"Mining demo block with k={k} ...")
-    t0 = time.time()
-    nonce = mine_block(k, prev_hash, rand_lines)
-    dt = time.time() - t0
-    ok = verify_nonce(k, prev_hash, rand_lines, nonce)
-    print(f"Found nonce: {nonce.hex()}  (len={len(nonce)} bytes)")
-    print(f"Verify: {ok}")
-    print(f"Elapsed: {dt:.3f}s")
+    # This code will be helpful for your testing
+    filename = "bitcoin_text.txt"
+    num_lines = 11
+
+    # The "difficulty" level. For our blocks this is the number of Least Significant Bits
+    # that are 0s. For example, if diff = 5 then the last 5 bits of a valid block hash would be zeros
+    # The grader will not exceed 20 bits of "difficulty" because larger values take to long
+    diff = 20
+
+    transactions = get_random_lines(filename, num_lines)
+    nonce = mine_block(diff, transactions)
+    print(nonce)
