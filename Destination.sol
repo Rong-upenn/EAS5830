@@ -24,10 +24,12 @@ contract Destination is AccessControl {
 
 	function wrap(address _underlying_token, address _recipient, uint256 _amount ) public onlyRole(WARDEN_ROLE) {
 		//YOUR CODE HERE
-		    address wrapped_token = wrapped_tokens[_underlying_token];
+		// Check if token is registered
+		address wrapped_token = wrapped_tokens[_underlying_token];
         require(wrapped_token != address(0), "Wrapped token does not exist");
-
+		// Mint wrapped tokens to recipient
         BridgeToken(wrapped_token).mint(_recipient, _amount);
+		// Emit event
         emit Wrap(_underlying_token, wrapped_token, _recipient, _amount);	
 	}
 
