@@ -55,17 +55,16 @@ contract Destination is AccessControl {
     	require(wrapped_tokens[_underlying_token] == address(0), "Token already exists");
     
     	// Deploy new BridgeToken
-    	BridgeToken newToken = new BridgeToken(_underlying_token, name, symbol, address(this));
-    	address wrappedTokenAddress = address(newToken);
-    
-    	// Store mappings
-    	nderlying_tokens[wrappedTokenAddress] = _underlying_token;
-    	wrapped_tokens[_underlying_token] = wrappedTokenAddress;
-    	tokens.push(_underlying_token);
-    
+    	BridgeToken wrapped_token = new BridgeToken(_underlying_token, name, symbol, address(this));
+    	wrapped_tokens[_underlying_token] = address(wrapped_token);;
+		underlying_tokens[address(wrapped_token)] = _underlying_token;
+		tokens.push(_underlying_token);
+		
+		// Grant MINTER_ROLE to this contract
+        wrapped_token.grantRole(wrapped_token.MINTER_ROLE(), address(this));
+
     	// Emit event
     	emit Creation(_underlying_token, wrappedTokenAddress);
-    
     	return wrappedTokenAddress;
 
 	}
