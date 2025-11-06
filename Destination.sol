@@ -35,10 +35,12 @@ contract Destination is AccessControl {
 
 	function unwrap(address _wrapped_token, address _recipient, uint256 _amount ) public {
 		//YOUR CODE HERE
+		// Check if wrapped token is valid
 	    address underlying_token = underlying_tokens[_wrapped_token];
         require(underlying_token != address(0), "Underlying token does not exist");
-
+		// Burn wrapped tokens from sender
         BridgeToken(_wrapped_token).burnFrom(msg.sender, _amount);
+		// Emit event
         emit Unwrap(underlying_token, _wrapped_token, msg.sender, _recipient, _amount);
 	}
 
