@@ -50,44 +50,23 @@ def scan_blocks(chain, start_block, end_block, contract_address, eventfile='depo
     else:
         print( f"Scanning blocks {start_block} - {end_block} on {chain}" )
 
-    
+    rows = []  # To store extracted event data
 
     if end_block - start_block < 30:
         event_filter = contract.events.Deposit.create_filter(from_block=start_block,to_block=end_block,argument_filters=arg_filter)
         events = event_filter.get_all_entries()
         #print( f"Got {len(events)} entries for block {block_num}" )
         # TODO YOUR CODE HERE
-        rows = []
+        
         for evt in events:
-            row = {
+            rows.append({
                 "chain": chain,
                 "token": evt.args["token"],
                 "recipient": evt.args["to"],
                 "amount": int(evt.args["amount"]),
                 "transactionHash": evt.transactionHash.hex(),
                 "address": evt.address,
-            }
-            rows.append(row)
-
-        if rows:
-            df_new = pd.DataFrame(
-                rows,
-                columns=[
-                    "chain",
-                    "token",
-                    "recipient",
-                    "amount",
-                    "transactionHash",
-                    "address",
-                ],
-            )
-            csv_path = Path(eventfile)
-            if csv_path.exists() and csv_path.stat().st_size > 0:
-                # File already exists, append without header
-                df_new.to_csv(csv_path, mode="a", header=False, index=False)
-            else:
-                # Create new file with header
-                df_new.to_csv(csv_path, index=False)
+            })
 
     else:
         for block_num in range(start_block,end_block+1):
@@ -95,3 +74,20 @@ def scan_blocks(chain, start_block, end_block, contract_address, eventfile='depo
             events = event_filter.get_all_entries()
             #print( f"Got {len(events)} entries for block {block_num}" )
             # TODO YOUR CODE HERE
+            for evt in events:
+                rows.append({
+                    'chain': chain,
+                    'token': evt.args['token'],
+                    'recipient': evt.args['recipient'],
+                    'amount': evt.args['amount'],
+                    'transactionHash': evt.transactionHash.hex(),
+                    'address': evt.address,
+                })
+
+    # Write to CSV
+    if rows:
+        df = pd.DataFrame(rows)
+        df.to_csv(eventfile, index=False)
+        print(f"Events logged to {eventfile}")
+    else:
+        print("No events found in the specified range.")
