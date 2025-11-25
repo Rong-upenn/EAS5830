@@ -8,13 +8,56 @@ from eth_account import Account
 import time
 import os
 
+def get_avax_rpc():
+    """获取可用的AVAX RPC端点"""
+    avax_endpoints = [
+        "https://api.avax-test.network/ext/bc/C/rpc",
+        "https://avax-testnet.public-rpc.com",
+        "https://rpc.ankr.com/avalanche_fuji",
+        "https://avalanche-fuji-c-chain.publicnode.com",
+        "https://endpoints.omniatech.io/v1/avax/fuji/public"
+    ]
+    
+    for endpoint in avax_endpoints:
+        try:
+            w3 = Web3(Web3.HTTPProvider(endpoint))
+            if w3.is_connected():
+                print(f"✅ Connected to AVAX via: {endpoint}")
+                return w3
+        except:
+            continue
+    
+    raise Exception("❌ Could not connect to any AVAX endpoint")
+
+def get_bsc_rpc():
+    """获取可用的BSC RPC端点"""
+    bsc_endpoints = [
+        "https://data-seed-prebsc-1-s1.binance.org:8545/",
+        "https://data-seed-prebsc-2-s1.binance.org:8545/",
+        "https://data-seed-prebsc-1-s2.binance.org:8545/",
+        "https://bsc-testnet.publicnode.com",
+        "https://bsc-testnet-rpc.publicnode.com",
+        "https://bsc-testnet.nodereal.io/v1/64a9df0874fb4a93b9d0a3849de012d3",
+        "https://endpoints.omniatech.io/v1/bsc/testnet/public"
+    ]
+    
+    for endpoint in bsc_endpoints:
+        try:
+            w3 = Web3(Web3.HTTPProvider(endpoint))
+            if w3.is_connected():
+                print(f"✅ Connected to BSC via: {endpoint}")
+                return w3
+        except:
+            continue
+    
+    raise Exception("❌ Could not connect to any BSC endpoint")
+
 def connect_to(chain):
     if chain == 'source':  # AVAX
-        api_url = "https://api.avax-test.network/ext/bc/C/rpc"
+        w3 = get_avax_rpc()
     elif chain == 'destination':  # BSC
-        api_url = "https://bsc-testnet.publicnode.com"
+        w3 = get_bsc_rpc()
     
-    w3 = Web3(Web3.HTTPProvider(api_url))
     w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
     return w3
 
@@ -29,7 +72,6 @@ def get_contract_info(chain, contract_info="contract_info.json"):
 
 def load_private_key():
     """Hardcoded private key for autograder"""
-    # REPLACE THIS WITH YOUR ACTUAL PRIVATE KEY
     priv_key = "3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"
     
     if not priv_key.startswith("0x"):
@@ -52,7 +94,7 @@ def sign_and_send_transaction(w3, contract, function_name, args, private_key, ga
         
         signed_txn = w3.eth.account.sign_transaction(transaction, private_key)
         
-        # Try both attribute names for compatibility
+        # 兼容两种属性名
         if hasattr(signed_txn, 'rawTransaction'):
             raw_tx = signed_txn.rawTransaction
         else:
@@ -95,9 +137,13 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         print("❌ Failed to load contract info")
         return 0
     
-    # Connect to both chains
-    w3_source = connect_to('source')
-    w3_destination = connect_to('destination')
+    try:
+        # Connect to both chains
+        w3_source = connect_to('source')
+        w3_destination = connect_to('destination')
+    except Exception as e:
+        print(f"❌ Connection error: {e}")
+        return 0
     
     # Create contract instances
     source_contract = w3_source.eth.contract(
@@ -120,7 +166,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         print(f"🔍 Scanning AVAX blocks {from_block} to {current_block} for Deposit events")
         
         try:
-            # Web3.py version compatible event scanning
+            # 兼容不同web3.py版本的事件扫描
             deposit_events = []
             for block_num in range(from_block, current_block + 1):
                 try:
@@ -130,13 +176,17 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                     )
                     deposit_events.extend(events)
                 except TypeError:
-                    # Fallback for older web3.py versions
-                    event_filter = source_contract.events.Deposit.createFilter(
-                        fromBlock=block_num,
-                        toBlock=block_num
-                    )
-                    events = event_filter.get_all_entries()
-                    deposit_events.extend(events)
+                    # 旧版本web3.py的回退方案
+                    try:
+                        event_filter = source_contract.events.Deposit.createFilter(
+                            fromBlock=block_num,
+                            toBlock=block_num
+                        )
+                        events = event_filter.get_all_entries()
+                        deposit_events.extend(events)
+                    except Exception as e:
+                        print(f"❌ Error scanning block {block_num}: {e}")
+                        continue
             
             print(f"📝 Found {len(deposit_events)} Deposit events")
             
@@ -146,12 +196,12 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 print(f"   Recipient: {event.args.recipient}")
                 print(f"   Amount: {event.args.amount}")
                 
-                # Add delay for autograder to catch first event
+                # 为autograder添加延迟
                 if i == 0:
                     print("⏳ Adding delay for autograder...")
                     time.sleep(3)
                 
-                # Call wrap on destination chain (BSC)
+                # 在目标链(BSC)上调用wrap
                 success = sign_and_send_transaction(
                     w3_destination,
                     destination_contract,
@@ -176,7 +226,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         print(f"🔍 Scanning BSC blocks {from_block} to {current_block} for Unwrap events")
         
         try:
-            # Web3.py version compatible event scanning
+            # 兼容不同web3.py版本的事件扫描
             unwrap_events = []
             for block_num in range(from_block, current_block + 1):
                 try:
@@ -186,13 +236,17 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                     )
                     unwrap_events.extend(events)
                 except TypeError:
-                    # Fallback for older web3.py versions
-                    event_filter = destination_contract.events.Unwrap.createFilter(
-                        fromBlock=block_num,
-                        toBlock=block_num
-                    )
-                    events = event_filter.get_all_entries()
-                    unwrap_events.extend(events)
+                    # 旧版本web3.py的回退方案
+                    try:
+                        event_filter = destination_contract.events.Unwrap.createFilter(
+                            fromBlock=block_num,
+                            toBlock=block_num
+                        )
+                        events = event_filter.get_all_entries()
+                        unwrap_events.extend(events)
+                    except Exception as e:
+                        print(f"❌ Error scanning block {block_num}: {e}")
+                        continue
             
             print(f"📝 Found {len(unwrap_events)} Unwrap events")
             
@@ -202,12 +256,12 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 print(f"   To: {event.args.to}")
                 print(f"   Amount: {event.args.amount}")
                 
-                # Add delay for autograder to catch first event
+                # 为autograder添加延迟
                 if i == 0:
                     print("⏳ Adding delay for autograder...")
                     time.sleep(3)
                 
-                # Call withdraw on source chain (AVAX)
+                # 在源链(AVAX)上调用withdraw
                 success = sign_and_send_transaction(
                     w3_source,
                     source_contract,
