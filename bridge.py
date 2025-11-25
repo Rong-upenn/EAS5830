@@ -120,10 +120,23 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         print(f"🔍 Scanning AVAX blocks {from_block} to {current_block} for Deposit events")
         
         try:
-            deposit_events = source_contract.events.Deposit.get_logs(
-                fromBlock=from_block,
-                toBlock=current_block
-            )
+            # Web3.py version compatible event scanning
+            deposit_events = []
+            for block_num in range(from_block, current_block + 1):
+                try:
+                    events = source_contract.events.Deposit.get_logs(
+                        fromBlock=block_num,
+                        toBlock=block_num
+                    )
+                    deposit_events.extend(events)
+                except TypeError:
+                    # Fallback for older web3.py versions
+                    event_filter = source_contract.events.Deposit.createFilter(
+                        fromBlock=block_num,
+                        toBlock=block_num
+                    )
+                    events = event_filter.get_all_entries()
+                    deposit_events.extend(events)
             
             print(f"📝 Found {len(deposit_events)} Deposit events")
             
@@ -163,10 +176,23 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         print(f"🔍 Scanning BSC blocks {from_block} to {current_block} for Unwrap events")
         
         try:
-            unwrap_events = destination_contract.events.Unwrap.get_logs(
-                fromBlock=from_block,
-                toBlock=current_block
-            )
+            # Web3.py version compatible event scanning
+            unwrap_events = []
+            for block_num in range(from_block, current_block + 1):
+                try:
+                    events = destination_contract.events.Unwrap.get_logs(
+                        fromBlock=block_num,
+                        toBlock=block_num
+                    )
+                    unwrap_events.extend(events)
+                except TypeError:
+                    # Fallback for older web3.py versions
+                    event_filter = destination_contract.events.Unwrap.createFilter(
+                        fromBlock=block_num,
+                        toBlock=block_num
+                    )
+                    events = event_filter.get_all_entries()
+                    unwrap_events.extend(events)
             
             print(f"📝 Found {len(unwrap_events)} Unwrap events")
             
