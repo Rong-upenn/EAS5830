@@ -31,7 +31,7 @@ def get_contract_info(path="contract_info.json"):
 # Load private key
 # ----------------------
 def load_privkey():
-    priv = "3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"  # <<<<<< PUT YOUR PRIVATE KEY HERE
+    priv = "3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"
     if not priv:
         raise Exception("❌ Private key missing in bridge.py")
 
@@ -78,6 +78,50 @@ def send_tx(w3, contract, func, args, pk, nonce, gas=200000):
 
 
 # ----------------------
+# Manual event scanning for old web3 versions
+# ----------------------
+def scan_events_manual(w3, contract, event_name, from_block, to_block):
+    """Manual event scanning for old web3.py versions"""
+    events = []
+    event_abi = None
+    
+    # Find the event ABI
+    for abi_item in contract.abi:
+        if abi_item.get('type') == 'event' and abi_item.get('name') == event_name:
+            event_abi = abi_item
+            break
+    
+    if not event_abi:
+        print(f"❌ Event {event_name} not found in contract ABI")
+        return events
+    
+    # Scan blocks manually
+    for block_num in range(from_block, to_block + 1):
+        try:
+            block = w3.eth.get_block(block_num, full_transactions=True)
+            for tx in block.transactions:
+                if isinstance(tx, dict) and 'to' in tx and tx['to'] and tx['to'].lower() == contract.address.lower():
+                    try:
+                        receipt = w3.eth.get_transaction_receipt(tx['hash'])
+                        for log in receipt.logs:
+                            # Check if this log matches our event
+                            if log['address'].lower() == contract.address.lower():
+                                # Try to decode the log
+                                try:
+                                    decoded_event = contract.events[event_name]().process_log(log)
+                                    events.append(decoded_event)
+                                except:
+                                    continue
+                    except:
+                        continue
+        except Exception as e:
+            print(f"⚠️ Could not scan block {block_num}: {e}")
+            continue
+    
+    return events
+
+
+# ----------------------
 # Event-driven bridge logic
 # ----------------------
 def scan_blocks(chain, info_path="contract_info.json"):
@@ -104,25 +148,12 @@ def scan_blocks(chain, info_path="contract_info.json"):
     if chain == "source":
         print("🔍 Checking for Deposit events → sending wrap() ...")
 
-        # Get recent blocks (last 200 blocks to be safe)
+        # Get block range (last 50 blocks to be efficient)
         latest_block = w3_src.eth.block_number
-        from_block = max(0, latest_block - 200)
+        from_block = max(0, latest_block - 50)
         
-        # Use the older compatible method for event filtering
-        try:
-            # Try the newer method first
-            events = source.events.Deposit.get_logs(fromBlock=from_block, toBlock='latest')
-        except TypeError:
-            # Fallback to manual block-by-block scanning
-            print("⚠️ Using fallback event scanning method")
-            events = []
-            for block_num in range(from_block, latest_block + 1):
-                try:
-                    block_events = source.events.Deposit.get_logs(fromBlock=block_num, toBlock=block_num)
-                    events.extend(block_events)
-                except Exception as e:
-                    print(f"⚠️ Could not scan block {block_num}: {e}")
-                    continue
+        # Use manual event scanning
+        events = scan_events_manual(w3_src, source, "Deposit", from_block, latest_block)
 
         if not events:
             print("ℹ️ No Deposit events found.")
@@ -156,25 +187,12 @@ def scan_blocks(chain, info_path="contract_info.json"):
     if chain == "destination":
         print("🔍 Checking for Unwrap events → sending withdraw() ...")
 
-        # Get recent blocks (last 200 blocks to be safe)
+        # Get block range (last 50 blocks to be efficient)
         latest_block = w3_dst.eth.block_number
-        from_block = max(0, latest_block - 200)
+        from_block = max(0, latest_block - 50)
         
-        # Use the older compatible method for event filtering
-        try:
-            # Try the newer method first
-            events = dest.events.Unwrap.get_logs(fromBlock=from_block, toBlock='latest')
-        except TypeError:
-            # Fallback to manual block-by-block scanning
-            print("⚠️ Using fallback event scanning method")
-            events = []
-            for block_num in range(from_block, latest_block + 1):
-                try:
-                    block_events = dest.events.Unwrap.get_logs(fromBlock=block_num, toBlock=block_num)
-                    events.extend(block_events)
-                except Exception as e:
-                    print(f"⚠️ Could not scan block {block_num}: {e}")
-                    continue
+        # Use manual event scanning
+        events = scan_events_manual(w3_dst, dest, "Unwrap", from_block, latest_block)
 
         if not events:
             print("ℹ️ No Unwrap events found.")
