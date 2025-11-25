@@ -1,235 +1,252 @@
-# bridge.py – FINAL AUTOGRADER-COMPATIBLE VERSION
+# bridge.py – event-driven bridge for EAS5830
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 from eth_account import Account
 import json
-import time
 
-# ----------------------
-# Connections
-# ----------------------
-def connect(chain):
+
+# -------------------------
+# RPC Connections
+# -------------------------
+def connect_to(chain: str) -> Web3:
+    """
+    Connect to AVAX Fuji (source) or BSC Testnet (destination).
+    """
     if chain == "source":  # Avalanche Fuji
-        url = "https://api.avax-test.network/ext/bc/C/rpc"
-    else:  # BSC Testnet
-        url = "https://data-seed-prebsc-1-s1.binance.org:8545/"
+        rpc_url = "https://api.avax-test.network/ext/bc/C/rpc"
+    elif chain == "destination":  # BSC Testnet
+        rpc_url = "https://data-seed-prebsc-1-s1.binance.org:8545/"
+    else:
+        raise ValueError(f"Unknown chain: {chain}")
 
-    w3 = Web3(Web3.HTTPProvider(url))
+    w3 = Web3(Web3.HTTPProvider(rpc_url))
+    # Required for these testnets (POA)
     w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+    if not w3.is_connected():
+        raise RuntimeError(f"Failed to connect to {chain} RPC")
     return w3
 
 
-# ----------------------
-# Load contract info
-# ----------------------
-def get_contract_info(path="contract_info.json"):
+# -------------------------
+# Contract Info
+# -------------------------
+def get_contracts_info(path: str = "contract_info.json"):
+    """
+    Load source and destination contract info (address + ABI) from JSON.
+    """
     with open(path, "r") as f:
-        return json.load(f)
+        data = json.load(f)
+    return data["source"], data["destination"]
 
 
-# ----------------------
-# Load private key
-# ----------------------
-def load_privkey():
-    priv = "3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"
-    if not priv:
-        raise Exception("❌ Private key missing in bridge.py")
+# -------------------------
+# Private Key
+# -------------------------
+def load_private_key() -> str:
+    """
+    Load the warden private key.
+    IMPORTANT: Put your actual private key string below.
+    """
+    priv_key = "3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"  # <<< PUT YOUR PRIVATE KEY HERE, e.g. "0xabc123..."
 
-    if not priv.startswith("0x"):
-        priv = "0x" + priv
+    if not priv_key:
+        raise RuntimeError("Private key is empty in load_private_key().")
 
-    return priv
+    if not priv_key.startswith("0x"):
+        priv_key = "0x" + priv_key
+
+    return priv_key
 
 
-# ----------------------
-# Sign + Send
-# ----------------------
-def send_tx(w3, contract, func, args, pk, nonce, gas=200000):
-    acct = Account.from_key(pk)
-    print(f"📝 nonce={nonce}, gas={gas}")
+# -------------------------
+# TX Helper
+# -------------------------
+def sign_and_send_tx(w3: Web3, contract, function_name: str, args, priv_key: str,
+                     nonce: int, gas_limit: int = 200_000):
+    """
+    Sign and send a transaction to a contract function, with robust handling of rawTransaction attribute.
+    Returns (success: bool, new_nonce: int).
+    """
+    acct = Account.from_key(priv_key)
+    print(f"📝 Sending {function_name} with nonce={nonce}, gas={gas_limit}")
 
     try:
-        tx = getattr(contract.functions, func)(*args).build_transaction({
+        fn = getattr(contract.functions, function_name)(*args)
+        tx = fn.build_transaction({
             "from": acct.address,
             "nonce": nonce,
             "chainId": w3.eth.chain_id,
-            "gas": gas,
-            "gasPrice": w3.eth.gas_price
+            "gas": gas_limit,
+            "gasPrice": w3.eth.gas_price,
         })
 
-        signed = w3.eth.account.sign_transaction(tx, pk)
-        raw = signed.rawTransaction
+        signed = w3.eth.account.sign_transaction(tx, priv_key)
 
-        tx_hash = w3.eth.send_raw_transaction(raw)
-        print(f"➡️ sent {func}: {tx_hash.hex()}")
+        # Compatibility with different eth-account versions
+        raw_tx = getattr(signed, "rawTransaction", None)
+        if raw_tx is None:
+            raw_tx = getattr(signed, "raw_transaction")
+
+        tx_hash = w3.eth.send_raw_transaction(raw_tx)
+        print(f"➡️ Sent {function_name}: {tx_hash.hex()}")
 
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
-
         if receipt.status == 1:
-            print(f"✅ {func} success in block {receipt.blockNumber}")
+            print(f"✅ {function_name} succeeded in block {receipt.blockNumber}")
             return True, nonce + 1
         else:
-            print(f"❌ {func} reverted")
-            return False, w3.eth.get_transaction_count(acct.address)
+            print(f"❌ {function_name} reverted")
+            # Refresh nonce after failure
+            new_nonce = w3.eth.get_transaction_count(acct.address)
+            return False, new_nonce
 
     except Exception as e:
-        print(f"❌ TX error in {func}: {e}")
-        return False, w3.eth.get_transaction_count(acct.address)
+        print(f"❌ Error during {function_name}: {e}")
+        new_nonce = w3.eth.get_transaction_count(acct.address)
+        return False, new_nonce
 
 
-# ----------------------
-# Manual event scanning for old web3 versions
-# ----------------------
-def scan_events_manual(w3, contract, event_name, from_block, to_block):
-    """Manual event scanning for old web3.py versions"""
-    events = []
-    event_abi = None
-    
-    # Find the event ABI
-    for abi_item in contract.abi:
-        if abi_item.get('type') == 'event' and abi_item.get('name') == event_name:
-            event_abi = abi_item
-            break
-    
-    if not event_abi:
-        print(f"❌ Event {event_name} not found in contract ABI")
-        return events
-    
-    # Scan blocks manually
-    for block_num in range(from_block, to_block + 1):
-        try:
-            block = w3.eth.get_block(block_num, full_transactions=True)
-            for tx in block.transactions:
-                if isinstance(tx, dict) and 'to' in tx and tx['to'] and tx['to'].lower() == contract.address.lower():
-                    try:
-                        receipt = w3.eth.get_transaction_receipt(tx['hash'])
-                        for log in receipt.logs:
-                            # Check if this log matches our event
-                            if log['address'].lower() == contract.address.lower():
-                                # Try to decode the log
-                                try:
-                                    decoded_event = contract.events[event_name]().process_log(log)
-                                    events.append(decoded_event)
-                                except:
-                                    continue
-                    except:
-                        continue
-        except Exception as e:
-            print(f"⚠️ Could not scan block {block_num}: {e}")
-            continue
-    
-    return events
+# -------------------------
+# Main Bridge Logic
+# -------------------------
+def scan_blocks(chain: str, contract_info: str = "contract_info.json") -> int:
+    """
+    Main entry point used by the autograder.
+    chain: "source" or "destination"
+    - On "source": read Deposit events on AVAX → call wrap() on BSC.
+    - On "destination": read Unwrap events on BSC → call withdraw() on AVAX.
+    """
+    # Load key & account
+    priv_key = load_private_key()
+    warden = Account.from_key(priv_key)
+    print(f"🔑 Warden Address: {warden.address}")
 
+    # Load contract metadata
+    source_info, dest_info = get_contracts_info(contract_info)
 
-# ----------------------
-# Event-driven bridge logic
-# ----------------------
-def scan_blocks(chain, info_path="contract_info.json"):
-    # Load key + account
-    pk = load_privkey()
-    acct = Account.from_key(pk)
-    print(f"🔑 Warden Address: {acct.address}")
+    # Connect to both chains
+    w3_source = connect_to("source")
+    w3_dest = connect_to("destination")
 
-    # Load contract info
-    info = get_contract_info(info_path)
-    source_info = info["source"]
-    dest_info = info["destination"]
+    # Instantiate contracts
+    source_contract = w3_source.eth.contract(
+        address=source_info["address"],
+        abi=source_info["abi"],
+    )
+    dest_contract = w3_dest.eth.contract(
+        address=dest_info["address"],
+        abi=dest_info["abi"],
+    )
 
-    # Connect networks
-    w3_src = connect("source")
-    w3_dst = connect("destination")
-
-    source = w3_src.eth.contract(address=source_info["address"], abi=source_info["abi"])
-    dest = w3_dst.eth.contract(address=dest_info["address"], abi=dest_info["abi"])
-
-    # --------------------------
-    # 1. Source → wrap (Deposit → Wrap)
-    # --------------------------
+    # ---------------------------------------------------
+    # Case 1: Source side -> handle Deposit → wrap()
+    # ---------------------------------------------------
     if chain == "source":
-        print("🔍 Checking for Deposit events → sending wrap() ...")
+        print("🔍 Checking for Deposit events → calling wrap() on destination...")
 
-        # Get block range (last 50 blocks to be efficient)
-        latest_block = w3_src.eth.block_number
-        from_block = max(0, latest_block - 50)
-        
-        # Use manual event scanning
-        events = scan_events_manual(w3_src, source, "Deposit", from_block, latest_block)
+        latest_block = w3_source.eth.block_number
+        from_block = max(latest_block - 200, 0)  # scan last ~200 blocks
+
+        try:
+            deposit_filter = source_contract.events.Deposit.createFilter(
+                fromBlock=from_block,
+                toBlock=latest_block,
+            )
+            events = deposit_filter.get_all_entries()
+        except Exception as e:
+            print(f"❌ Error creating/fetching Deposit filter: {e}")
+            return 0
 
         if not events:
-            print("ℹ️ No Deposit events found.")
+            print("ℹ️ No Deposit events found in recent blocks.")
             return 1
 
-        nonce = w3_dst.eth.get_transaction_count(acct.address)
+        # Use nonce on destination (BSC) for wrap calls
+        nonce = w3_dest.eth.get_transaction_count(warden.address)
 
         for ev in events:
             token = ev["args"]["token"]
             recipient = ev["args"]["recipient"]
             amount = ev["args"]["amount"]
 
-            print(f"➡️ Deposit detected: token={token}, recipient={recipient}, amount={amount}")
+            print(f"➡️ Detected Deposit: token={token}, recipient={recipient}, amount={amount}")
 
-            ok, nonce = send_tx(
-                w3_dst, dest, "wrap",
+            ok, nonce = sign_and_send_tx(
+                w3_dest,
+                dest_contract,
+                "wrap",
                 [token, recipient, amount],
-                pk, nonce
+                priv_key,
+                nonce,
             )
 
             if ok:
-                print("🎉 Deposit → Wrap OK")
+                print("🎉 Bridged: Deposit → Wrap")
             else:
-                print("❌ Deposit → Wrap FAILED")
+                print("❌ Failed bridging Deposit → Wrap")
 
         return 1
 
-    # --------------------------
-    # 2. Destination → withdraw (Unwrap → Withdraw)
-    # --------------------------
-    if chain == "destination":
-        print("🔍 Checking for Unwrap events → sending withdraw() ...")
+    # ---------------------------------------------------
+    # Case 2: Destination side -> handle Unwrap → withdraw()
+    # ---------------------------------------------------
+    elif chain == "destination":
+        print("🔍 Checking for Unwrap events → calling withdraw() on source...")
 
-        # Get block range (last 50 blocks to be efficient)
-        latest_block = w3_dst.eth.block_number
-        from_block = max(0, latest_block - 50)
-        
-        # Use manual event scanning
-        events = scan_events_manual(w3_dst, dest, "Unwrap", from_block, latest_block)
+        latest_block = w3_dest.eth.block_number
+        from_block = max(latest_block - 200, 0)
+
+        try:
+            unwrap_filter = dest_contract.events.Unwrap.createFilter(
+                fromBlock=from_block,
+                toBlock=latest_block,
+            )
+            events = unwrap_filter.get_all_entries()
+        except Exception as e:
+            print(f"❌ Error creating/fetching Unwrap filter: {e}")
+            return 0
 
         if not events:
-            print("ℹ️ No Unwrap events found.")
+            print("ℹ️ No Unwrap events found in recent blocks.")
             return 1
 
-        nonce = w3_src.eth.get_transaction_count(acct.address)
+        # Use nonce on source (AVAX) for withdraw calls
+        nonce = w3_source.eth.get_transaction_count(warden.address)
 
         for ev in events:
-            # Note: Unwrap event uses different field names based on the ABI
-            token = ev["args"]["underlying_token"]
-            recipient = ev["args"]["to"]
+            token = ev["args"]["token"]
+            recipient = ev["args"]["recipient"]
             amount = ev["args"]["amount"]
 
-            print(f"➡️ Unwrap detected: token={token}, recipient={recipient}, amount={amount}")
+            print(f"➡️ Detected Unwrap: token={token}, recipient={recipient}, amount={amount}")
 
-            ok, nonce = send_tx(
-                w3_src, source, "withdraw",
+            ok, nonce = sign_and_send_tx(
+                w3_source,
+                source_contract,
+                "withdraw",
                 [token, recipient, amount],
-                pk, nonce
+                priv_key,
+                nonce,
             )
 
             if ok:
-                print("🎉 Unwrap → Withdraw OK")
+                print("🎉 Bridged: Unwrap → Withdraw")
             else:
-                print("❌ Unwrap → Withdraw FAILED")
+                print("❌ Failed bridging Unwrap → Withdraw")
 
         return 1
 
-    return 1
+    else:
+        print(f"❌ scan_blocks called with invalid chain argument: {chain}")
+        return 0
 
 
-# ----------------------
-# Manual testing
-# ----------------------
+# -------------------------
+# Local manual test
+# -------------------------
 if __name__ == "__main__":
-    print("🚀 Testing source → wrap")
+    print("🚀 Testing scan_blocks('source')")
     scan_blocks("source")
 
-    print("\n🚀 Testing destination → withdraw")
+    print("\n🚀 Testing scan_blocks('destination')")
     scan_blocks("destination")
