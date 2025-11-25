@@ -104,13 +104,25 @@ def scan_blocks(chain, info_path="contract_info.json"):
     if chain == "source":
         print("🔍 Checking for Deposit events → sending wrap() ...")
 
-        # Get latest block number
+        # Get recent blocks (last 200 blocks to be safe)
         latest_block = w3_src.eth.block_number
-        from_block = max(0, latest_block - 1000)  # Check last 1000 blocks
+        from_block = max(0, latest_block - 200)
         
-        # Create filter and get events
-        event_filter = source.events.Deposit.create_filter(fromBlock=from_block, toBlock='latest')
-        events = event_filter.get_all_entries()
+        # Use the older compatible method for event filtering
+        try:
+            # Try the newer method first
+            events = source.events.Deposit.get_logs(fromBlock=from_block, toBlock='latest')
+        except TypeError:
+            # Fallback to manual block-by-block scanning
+            print("⚠️ Using fallback event scanning method")
+            events = []
+            for block_num in range(from_block, latest_block + 1):
+                try:
+                    block_events = source.events.Deposit.get_logs(fromBlock=block_num, toBlock=block_num)
+                    events.extend(block_events)
+                except Exception as e:
+                    print(f"⚠️ Could not scan block {block_num}: {e}")
+                    continue
 
         if not events:
             print("ℹ️ No Deposit events found.")
@@ -144,13 +156,25 @@ def scan_blocks(chain, info_path="contract_info.json"):
     if chain == "destination":
         print("🔍 Checking for Unwrap events → sending withdraw() ...")
 
-        # Get latest block number
+        # Get recent blocks (last 200 blocks to be safe)
         latest_block = w3_dst.eth.block_number
-        from_block = max(0, latest_block - 1000)  # Check last 1000 blocks
+        from_block = max(0, latest_block - 200)
         
-        # Create filter and get events
-        event_filter = dest.events.Unwrap.create_filter(fromBlock=from_block, toBlock='latest')
-        events = event_filter.get_all_entries()
+        # Use the older compatible method for event filtering
+        try:
+            # Try the newer method first
+            events = dest.events.Unwrap.get_logs(fromBlock=from_block, toBlock='latest')
+        except TypeError:
+            # Fallback to manual block-by-block scanning
+            print("⚠️ Using fallback event scanning method")
+            events = []
+            for block_num in range(from_block, latest_block + 1):
+                try:
+                    block_events = dest.events.Unwrap.get_logs(fromBlock=block_num, toBlock=block_num)
+                    events.extend(block_events)
+                except Exception as e:
+                    print(f"⚠️ Could not scan block {block_num}: {e}")
+                    continue
 
         if not events:
             print("ℹ️ No Unwrap events found.")
@@ -159,7 +183,8 @@ def scan_blocks(chain, info_path="contract_info.json"):
         nonce = w3_src.eth.get_transaction_count(acct.address)
 
         for ev in events:
-            token = ev["args"]["underlying_token"]  # Note: Unwrap event uses different field names
+            # Note: Unwrap event uses different field names based on the ABI
+            token = ev["args"]["underlying_token"]
             recipient = ev["args"]["to"]
             amount = ev["args"]["amount"]
 
