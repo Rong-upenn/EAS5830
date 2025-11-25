@@ -1,4 +1,4 @@
-# bridge.py - 修复版本，正确处理事件参数
+# bridge.py - 修复gas问题
 from web3 import Web3
 from web3.providers.rpc import HTTPProvider
 from web3.middleware import ExtraDataToPOAMiddleware
@@ -39,19 +39,17 @@ def load_private_key():
         
     return priv_key
 
-def sign_and_send_transaction_compatible(w3, contract, function_name, args, private_key, gas_limit=300000):
-    """Compatible transaction signing with nonce handling"""
+def sign_and_send_transaction_compatible(w3, contract, function_name, args, private_key, nonce, gas_limit=200000):
+    """Compatible transaction signing with proper gas"""
     try:
         account = Account.from_key(private_key)
         
-        # 获取当前nonce
-        nonce = w3.eth.get_transaction_count(account.address)
-        print(f"📝 Using nonce: {nonce}")
+        print(f"📝 Using nonce: {nonce}, gas: {gas_limit}")
         
-        # Build transaction
+        # Build transaction with sufficient gas
         transaction = getattr(contract.functions, function_name)(*args).build_transaction({
             'chainId': w3.eth.chain_id,
-            'gas': gas_limit,
+            'gas': gas_limit,  # 足够的gas
             'gasPrice': w3.eth.gas_price,
             'nonce': nonce,
         })
@@ -155,7 +153,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 print("⏳ Adding delay for autograder...")
                 time.sleep(3)
             
-            # Call wrap on destination chain (BSC)
+            # Call wrap on destination chain (BSC) with sufficient gas
             success, bsc_nonce = sign_and_send_transaction_compatible(
                 w3_destination,
                 destination_contract,
@@ -166,7 +164,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                     1000000000000000000  # _amount
                 ],
                 priv_key,
-                bsc_nonce  # 传递当前的nonce
+                bsc_nonce,
+                200000  # 足够的gas limit
             )
             
             if success:
@@ -197,7 +196,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 print("⏳ Adding delay for autograder...")
                 time.sleep(3)
             
-            # Call withdraw on source chain (AVAX)
+            # Call withdraw on source chain (AVAX) with sufficient gas
             success, avax_nonce = sign_and_send_transaction_compatible(
                 w3_source,
                 source_contract,
@@ -208,7 +207,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                     1000000000000000000  # _amount
                 ],
                 priv_key,
-                avax_nonce  # 传递当前的nonce
+                avax_nonce,
+                200000  # 足够的gas limit
             )
             
             if success:
