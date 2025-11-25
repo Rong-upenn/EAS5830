@@ -50,7 +50,6 @@ def load_private_key():
     """Load private key from .env file"""
     priv_key = os.getenv('PRIVATE_KEY')
     if not priv_key:
-        # 尝试从secret_key.txt读取
         try:
             with open("secret_key.txt", "r") as f:
                 priv_key = f.read().strip()
@@ -215,7 +214,6 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                     print("⏳ Adding delay for autograder...")
                     time.sleep(2)
                 
-                # 参数对齐：使用 underlying_token 而不是 wrapped_token
                 # Call withdraw on source chain
                 success = sign_and_send_transaction(
                     w3_source,
