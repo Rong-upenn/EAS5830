@@ -104,8 +104,13 @@ def scan_blocks(chain, info_path="contract_info.json"):
     if chain == "source":
         print("🔍 Checking for Deposit events → sending wrap() ...")
 
-        # Filter Deposit events
-        events = source.events.Deposit().get_logs(fromBlock="latest")
+        # Get latest block number
+        latest_block = w3_src.eth.block_number
+        from_block = max(0, latest_block - 1000)  # Check last 1000 blocks
+        
+        # Create filter and get events
+        event_filter = source.events.Deposit.create_filter(fromBlock=from_block, toBlock='latest')
+        events = event_filter.get_all_entries()
 
         if not events:
             print("ℹ️ No Deposit events found.")
@@ -139,7 +144,13 @@ def scan_blocks(chain, info_path="contract_info.json"):
     if chain == "destination":
         print("🔍 Checking for Unwrap events → sending withdraw() ...")
 
-        events = dest.events.Unwrap().get_logs(fromBlock="latest")
+        # Get latest block number
+        latest_block = w3_dst.eth.block_number
+        from_block = max(0, latest_block - 1000)  # Check last 1000 blocks
+        
+        # Create filter and get events
+        event_filter = dest.events.Unwrap.create_filter(fromBlock=from_block, toBlock='latest')
+        events = event_filter.get_all_entries()
 
         if not events:
             print("ℹ️ No Unwrap events found.")
@@ -148,8 +159,8 @@ def scan_blocks(chain, info_path="contract_info.json"):
         nonce = w3_src.eth.get_transaction_count(acct.address)
 
         for ev in events:
-            token = ev["args"]["token"]
-            recipient = ev["args"]["recipient"]
+            token = ev["args"]["underlying_token"]  # Note: Unwrap event uses different field names
+            recipient = ev["args"]["to"]
             amount = ev["args"]["amount"]
 
             print(f"➡️ Unwrap detected: token={token}, recipient={recipient}, amount={amount}")
