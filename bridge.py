@@ -8,56 +8,13 @@ from eth_account import Account
 import time
 import os
 
-def get_avax_rpc():
-    """获取可用的AVAX RPC端点"""
-    avax_endpoints = [
-        "https://api.avax-test.network/ext/bc/C/rpc",
-        "https://avax-testnet.public-rpc.com",
-        "https://rpc.ankr.com/avalanche_fuji",
-        "https://avalanche-fuji-c-chain.publicnode.com",
-        "https://endpoints.omniatech.io/v1/avax/fuji/public"
-    ]
-    
-    for endpoint in avax_endpoints:
-        try:
-            w3 = Web3(Web3.HTTPProvider(endpoint))
-            if w3.is_connected():
-                print(f"✅ Connected to AVAX via: {endpoint}")
-                return w3
-        except:
-            continue
-    
-    raise Exception("❌ Could not connect to any AVAX endpoint")
-
-def get_bsc_rpc():
-    """获取可用的BSC RPC端点"""
-    bsc_endpoints = [
-        "https://data-seed-prebsc-1-s1.binance.org:8545/",
-        "https://data-seed-prebsc-2-s1.binance.org:8545/",
-        "https://data-seed-prebsc-1-s2.binance.org:8545/",
-        "https://bsc-testnet.publicnode.com",
-        "https://bsc-testnet-rpc.publicnode.com",
-        "https://bsc-testnet.nodereal.io/v1/64a9df0874fb4a93b9d0a3849de012d3",
-        "https://endpoints.omniatech.io/v1/bsc/testnet/public"
-    ]
-    
-    for endpoint in bsc_endpoints:
-        try:
-            w3 = Web3(Web3.HTTPProvider(endpoint))
-            if w3.is_connected():
-                print(f"✅ Connected to BSC via: {endpoint}")
-                return w3
-        except:
-            continue
-    
-    raise Exception("❌ Could not connect to any BSC endpoint")
-
 def connect_to(chain):
     if chain == 'source':  # AVAX
-        w3 = get_avax_rpc()
+        api_url = "https://api.avax-test.network/ext/bc/C/rpc"
     elif chain == 'destination':  # BSC
-        w3 = get_bsc_rpc()
+        api_url = "https://data-seed-prebsc-1-s1.binance.org:8545/"
     
+    w3 = Web3(Web3.HTTPProvider(api_url))
     w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
     return w3
 
@@ -72,6 +29,7 @@ def get_contract_info(chain, contract_info="contract_info.json"):
 
 def load_private_key():
     """Hardcoded private key for autograder"""
+    # 替换为你的实际私钥
     priv_key = "3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"
     
     if not priv_key.startswith("0x"):
@@ -116,6 +74,76 @@ def sign_and_send_transaction(w3, contract, function_name, args, private_key, ga
         print(f"❌ Error in {function_name}: {e}")
         return False
 
+def get_events_compatible(contract, event_name, from_block, to_block):
+    """完全兼容的事件获取方法"""
+    events = []
+    
+    # 方法1: 尝试get_logs (新版本)
+    try:
+        event_obj = getattr(contract.events, event_name)
+        events = event_obj.get_logs(fromBlock=from_block, toBlock=to_block)
+        print(f"✅ Used get_logs() for {event_name}")
+        return events
+    except Exception as e:
+        print(f"❌ get_logs failed: {e}")
+    
+    # 方法2: 手动扫描每个区块 (最兼容的方法)
+    print(f"🔄 Scanning blocks manually for {event_name}...")
+    for block_num in range(from_block, to_block + 1):
+        try:
+            # 获取区块中的所有日志
+            block = contract.web3.eth.get_block(block_num, full_transactions=True)
+            
+            for tx_hash in block.transactions:
+                try:
+                    receipt = contract.web3.eth.get_transaction_receipt(tx_hash)
+                    if receipt and receipt.logs:
+                        for log in receipt.logs:
+                            # 检查日志是否来自我们的合约并且匹配事件主题
+                            if (log.address.lower() == contract.address.lower() and
+                                len(log.topics) > 0):
+                                
+                                # 简单的事件匹配 (根据主题数量)
+                                if event_name == "Deposit" and len(log.topics) == 3:
+                                    # Deposit事件有3个topic
+                                    try:
+                                        event_data = {
+                                            'args': {
+                                                'token': log.topics[1],
+                                                'recipient': log.topics[2],
+                                                'amount': int.from_bytes(log.data, 'big')
+                                            },
+                                            'blockNumber': block_num,
+                                            'transactionHash': tx_hash
+                                        }
+                                        events.append(type('Event', (), event_data))
+                                    except:
+                                        continue
+                                        
+                                elif event_name == "Unwrap" and len(log.topics) == 4:
+                                    # Unwrap事件有4个topic
+                                    try:
+                                        event_data = {
+                                            'args': {
+                                                'underlying_token': log.topics[1],
+                                                'wrapped_token': log.topics[2],
+                                                'to': log.topics[3],
+                                                'amount': int.from_bytes(log.data, 'big')
+                                            },
+                                            'blockNumber': block_num,
+                                            'transactionHash': tx_hash
+                                        }
+                                        events.append(type('Event', (), event_data))
+                                    except:
+                                        continue
+                except Exception as e:
+                    continue
+        except Exception as e:
+            print(f"❌ Error scanning block {block_num}: {e}")
+            continue
+    
+    return events
+
 def scan_blocks(chain, contract_info="contract_info.json"):
     if chain not in ['source','destination']:
         print(f"Invalid chain: {chain}")
@@ -137,13 +165,9 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         print("❌ Failed to load contract info")
         return 0
     
-    try:
-        # Connect to both chains
-        w3_source = connect_to('source')
-        w3_destination = connect_to('destination')
-    except Exception as e:
-        print(f"❌ Connection error: {e}")
-        return 0
+    # Connect to both chains
+    w3_source = connect_to('source')
+    w3_destination = connect_to('destination')
     
     # Create contract instances
     source_contract = w3_source.eth.contract(
@@ -166,27 +190,13 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         print(f"🔍 Scanning AVAX blocks {from_block} to {current_block} for Deposit events")
         
         try:
-            # 兼容不同web3.py版本的事件扫描
-            deposit_events = []
-            for block_num in range(from_block, current_block + 1):
-                try:
-                    events = source_contract.events.Deposit.get_logs(
-                        fromBlock=block_num,
-                        toBlock=block_num
-                    )
-                    deposit_events.extend(events)
-                except TypeError:
-                    # 旧版本web3.py的回退方案
-                    try:
-                        event_filter = source_contract.events.Deposit.createFilter(
-                            fromBlock=block_num,
-                            toBlock=block_num
-                        )
-                        events = event_filter.get_all_entries()
-                        deposit_events.extend(events)
-                    except Exception as e:
-                        print(f"❌ Error scanning block {block_num}: {e}")
-                        continue
+            # 使用兼容的事件扫描方法
+            deposit_events = get_events_compatible(
+                source_contract, 
+                'Deposit', 
+                from_block, 
+                current_block
+            )
             
             print(f"📝 Found {len(deposit_events)} Deposit events")
             
@@ -226,27 +236,13 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         print(f"🔍 Scanning BSC blocks {from_block} to {current_block} for Unwrap events")
         
         try:
-            # 兼容不同web3.py版本的事件扫描
-            unwrap_events = []
-            for block_num in range(from_block, current_block + 1):
-                try:
-                    events = destination_contract.events.Unwrap.get_logs(
-                        fromBlock=block_num,
-                        toBlock=block_num
-                    )
-                    unwrap_events.extend(events)
-                except TypeError:
-                    # 旧版本web3.py的回退方案
-                    try:
-                        event_filter = destination_contract.events.Unwrap.createFilter(
-                            fromBlock=block_num,
-                            toBlock=block_num
-                        )
-                        events = event_filter.get_all_entries()
-                        unwrap_events.extend(events)
-                    except Exception as e:
-                        print(f"❌ Error scanning block {block_num}: {e}")
-                        continue
+            # 使用兼容的事件扫描方法
+            unwrap_events = get_events_compatible(
+                destination_contract,
+                'Unwrap',
+                from_block,
+                current_block
+            )
             
             print(f"📝 Found {len(unwrap_events)} Unwrap events")
             
