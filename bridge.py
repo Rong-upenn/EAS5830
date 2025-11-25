@@ -207,12 +207,11 @@ def scan_blocks(chain: str, contract_info: str = "contract_info.json") -> int:
     # Case 2: Destination side → handle Unwrap → withdraw()
     # ---------------------------------------------------
     if chain == "destination":
-        print(
-            "🔍 Checking for Unwrap events → calling withdraw() on source..."
-        )
+        print("🔍 Checking for Unwrap events → calling withdraw() on source...")
 
         latest_block = w3_dest.eth.block_number
-        from_block = max(latest_block - 200, 0)
+        # BSC 节点很严格，窗口开小一点就够了
+        from_block = max(latest_block - 20, 0)
 
         try:
             unwrap_events = dest_contract.events.Unwrap.get_logs(
@@ -221,6 +220,7 @@ def scan_blocks(chain: str, contract_info: str = "contract_info.json") -> int:
         except Exception as e:
             print(f"❌ Error fetching Unwrap logs: {e}")
             return 0
+
 
         if not unwrap_events:
             print("ℹ️ No Unwrap events found in recent blocks.")
