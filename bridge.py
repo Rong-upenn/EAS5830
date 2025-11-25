@@ -1,33 +1,18 @@
-# bridge.py - COMPATIBLE WITH OLD WEB3.PY
+# bridge.py - UPDATED FOR NEW EVENT STRUCTURE
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 from eth_account import Account
 import json
 
 def connect(chain):
-    """Connect to blockchain with fallback RPC URLs"""
-    if chain == "source":  # Avalanche Fuji
-        urls = [
-            "https://api.avax-test.network/ext/bc/C/rpc",
-            "https://avalanche-fuji-c-chain.publicnode.com"
-        ]
-    else:  # BSC Testnet
-        urls = [
-            "https://bsc-testnet-rpc.publicnode.com",
-            "https://bsc-testnet.publicnode.com"
-        ]
+    if chain == "source":
+        url = "https://api.avax-test.network/ext/bc/C/rpc"
+    else:
+        url = "https://bsc-testnet-rpc.publicnode.com"
     
-    for url in urls:
-        try:
-            w3 = Web3(Web3.HTTPProvider(url, request_kwargs={'timeout': 30}))
-            w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
-            if w3.is_connected():
-                print(f"✅ Connected to {chain}")
-                return w3
-        except:
-            continue
-    
-    raise Exception(f"❌ Could not connect to {chain}")
+    w3 = Web3(Web3.HTTPProvider(url, request_kwargs={'timeout': 30}))
+    w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+    return w3
 
 def get_contract_info(path="contract_info.json"):
     with open(path, "r") as f:
@@ -35,8 +20,6 @@ def get_contract_info(path="contract_info.json"):
 
 def load_privkey():
     priv = "3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"
-    if not priv:
-        raise Exception("❌ Private key missing in bridge.py")
     if not priv.startswith("0x"):
         priv = "0x" + priv
     return priv
@@ -70,60 +53,55 @@ def send_tx(w3, contract, func, args, pk, nonce, gas=200000):
         print(f"❌ {func} error: {e}")
         return False, w3.eth.get_transaction_count(acct.address)
 
-def get_events_manual(w3, contract_address, from_block, to_block, event_signature, is_unwrap=False):
-    """Manual event scanning compatible with old web3 versions"""
+def get_events_manual(w3, contract_address, from_block, to_block, event_type):
+    """Manual event scanning for new event structure"""
     events = []
-    blocks_scanned = 0
     
-    print(f"🔍 Scanning blocks {from_block} to {to_block}...")
+    # Calculate event signatures for your new events
+    if event_type == "Deposit":
+        # Deposit(address,address,uint256)
+        event_signature = "0x5548c837ab068cf56a2c2479df0882a4922fd203edb7517321831d95078c5f62"
+    else:  # Unwrap or Wrap
+        # Unwrap(address,address,uint256) or Wrap(address,address,uint256)
+        # These will have the same signature since they have the same parameters
+        event_signature = Web3.keccak(text="Unwrap(address,address,uint256)").hex()
+    
+    print(f"🔍 Scanning blocks {from_block} to {to_block} for {event_type} events...")
     
     for block_num in range(from_block, to_block + 1):
         try:
             block = w3.eth.get_block(block_num, full_transactions=True)
-            blocks_scanned += 1
             
             for tx in block.transactions:
                 if isinstance(tx, dict) and tx.get('to') and tx['to'].lower() == contract_address.lower():
                     try:
                         receipt = w3.eth.get_transaction_receipt(tx['hash'])
+                        
                         for log in receipt.logs:
                             if (log['address'].lower() == contract_address.lower() and 
                                 len(log['topics']) > 0 and 
                                 log['topics'][0].hex() == event_signature):
                                 
-                                if is_unwrap:
-                                    # Unwrap event: all data in data field
-                                    data = log['data']
-                                    if len(data) == 96:
-                                        token = Web3.to_checksum_address(data[12:32].hex())
-                                        recipient = Web3.to_checksum_address(data[44:64].hex())
-                                        amount = int.from_bytes(data[64:96], 'big')
-                                        
-                                        events.append({
-                                            'args': {'token': token, 'recipient': recipient, 'amount': amount}
-                                        })
-                                        print(f"✅ Unwrap in block {block_num}")
-                                else:
-                                    # Deposit event: token and recipient in topics, amount in data
-                                    if len(log['topics']) == 3:
-                                        token = Web3.to_checksum_address(log['topics'][1][12:].hex())
-                                        recipient = Web3.to_checksum_address(log['topics'][2][12:].hex())
-                                        amount = int(log['data'], 16) if log['data'] != '0x' else 0
-                                        
-                                        events.append({
-                                            'args': {'token': token, 'recipient': recipient, 'amount': amount}
-                                        })
-                                        print(f"✅ Deposit in block {block_num}")
-                    except:
+                                # For both Deposit and Unwrap events with the new structure
+                                if len(log['topics']) == 3:  # signature + 2 indexed params
+                                    token = Web3.to_checksum_address(log['topics'][1][12:].hex())
+                                    recipient = Web3.to_checksum_address(log['topics'][2][12:].hex())
+                                    amount = int(log['data'], 16) if log['data'] != '0x' else 0
+                                    
+                                    events.append({
+                                        'args': {'token': token, 'recipient': recipient, 'amount': amount}
+                                    })
+                                    print(f"✅ {event_type} in block {block_num}: token={token[:10]}..., recipient={recipient[:10]}..., amount={amount}")
+                                
+                    except Exception as e:
                         continue
-        except:
+        except Exception as e:
             continue
     
-    print(f"📊 Scanned {blocks_scanned} blocks, found {len(events)} events")
+    print(f"📊 Found {len(events)} {event_type} events")
     return events
 
 def scan_blocks(chain, info_path="contract_info.json"):
-    """Main function called by autograder"""
     pk = load_privkey()
     acct = Account.from_key(pk)
     print(f"🔑 Warden: {acct.address}")
@@ -144,18 +122,9 @@ def scan_blocks(chain, info_path="contract_info.json"):
         print("🔍 Scanning for Deposit events...")
         
         latest = w3_src.eth.block_number
-        # Scan reasonable range for autograder
-        from_block = max(latest - 1000, 0)
+        from_block = max(latest - 5000, 0)  # Larger range to catch autograder events
         
-        # Use manual scanning for compatibility
-        events = get_events_manual(
-            w3_src, 
-            info["source"]["address"], 
-            from_block, 
-            latest, 
-            "0x5548c837ab068cf56a2c2479df0882a4922fd203edb7517321831d95078c5f62",
-            is_unwrap=False
-        )
+        events = get_events_manual(w3_src, info["source"]["address"], from_block, latest, "Deposit")
 
         if not events:
             print("ℹ️ No Deposit events found")
@@ -169,7 +138,7 @@ def scan_blocks(chain, info_path="contract_info.json"):
             recipient = ev["args"]["recipient"]
             amount = ev["args"]["amount"]
 
-            print(f"➡️ Deposit: {token[:10]}..., {amount} tokens")
+            print(f"➡️ Processing Deposit: token={token}, amount={amount}")
 
             ok, nonce = send_tx(w3_dst, dest, "wrap", [token, recipient, amount], pk, nonce)
             if ok:
@@ -185,17 +154,9 @@ def scan_blocks(chain, info_path="contract_info.json"):
         print("🔍 Scanning for Unwrap events...")
         
         latest = w3_dst.eth.block_number
-        from_block = max(latest - 1000, 0)
+        from_block = max(latest - 5000, 0)  # Larger range to catch autograder events
         
-        # Manual scanning for Unwrap events
-        events = get_events_manual(
-            w3_dst,
-            info["destination"]["address"],
-            from_block,
-            latest,
-            "0xbe8e6aacbb5d99c99f1992d91d807f570d0acacabee02374369ed42710dc6698",
-            is_unwrap=True
-        )
+        events = get_events_manual(w3_dst, info["destination"]["address"], from_block, latest, "Unwrap")
 
         if not events:
             print("ℹ️ No Unwrap events found")
@@ -209,7 +170,7 @@ def scan_blocks(chain, info_path="contract_info.json"):
             recipient = ev["args"]["recipient"]
             amount = ev["args"]["amount"]
 
-            print(f"➡️ Unwrap: {token[:10]}..., {amount} tokens")
+            print(f"➡️ Processing Unwrap: token={token}, amount={amount}")
 
             ok, nonce = send_tx(w3_src, source, "withdraw", [token, recipient, amount], pk, nonce)
             if ok:
@@ -223,20 +184,8 @@ def scan_blocks(chain, info_path="contract_info.json"):
 
     return 1
 
-# Quick test without manual scanning
 if __name__ == "__main__":
-    print("🚀 Quick test - checking connections only")
-    pk = load_privkey()
-    acct = Account.from_key(pk)
-    print(f"🔑 Warden: {acct.address}")
-    
-    try:
-        w3_src = connect("source")
-        w3_dst = connect("destination")
-        print("✅ Connections successful")
-        
-        info = get_contract_info()
-        print(f"✅ Contracts loaded: {info['source']['address'][:10]}..., {info['destination']['address'][:10]}...")
-        
-    except Exception as e:
-        print(f"❌ Setup failed: {e}")
+    print("🚀 Testing source chain")
+    scan_blocks("source")
+    print("\n🚀 Testing destination chain")  
+    scan_blocks("destination")
