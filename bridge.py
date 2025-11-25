@@ -1,4 +1,4 @@
-# bridge.py – event-driven bridge for EAS5830
+# bridge.py – final version for EAS5830 Bridge V
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 from eth_account import Account
@@ -6,7 +6,7 @@ import json
 
 
 # -------------------------
-# RPC Connections
+# RPC connections
 # -------------------------
 def connect_to(chain: str) -> Web3:
     """
@@ -20,32 +20,34 @@ def connect_to(chain: str) -> Web3:
         raise ValueError(f"Unknown chain: {chain}")
 
     w3 = Web3(Web3.HTTPProvider(rpc_url))
-    # Required for these testnets (POA)
+    # Required for these PoA-style testnets
     w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+
     if not w3.is_connected():
-        raise RuntimeError(f"Failed to connect to {chain} RPC")
+        raise RuntimeError(f"Failed to connect to RPC for {chain}")
+
     return w3
 
 
 # -------------------------
-# Contract Info
+# Contract info
 # -------------------------
-def get_contracts_info(path: str = "contract_info.json"):
+def get_contract_info(chain: str, path: str = "contract_info.json"):
     """
-    Load source and destination contract info (address + ABI) from JSON.
+    Load address + ABI for 'source' or 'destination' from contract_info.json
     """
     with open(path, "r") as f:
         data = json.load(f)
-    return data["source"], data["destination"]
+    return data[chain]
 
 
 # -------------------------
-# Private Key
+# Private key
 # -------------------------
 def load_private_key() -> str:
     """
     Load the warden private key.
-    IMPORTANT: Put your actual private key string below.
+    IMPORTANT: fill in your actual private key string below.
     """
     priv_key = "3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"  # <<< PUT YOUR PRIVATE KEY HERE, e.g. "0xabc123..."
 
@@ -59,30 +61,39 @@ def load_private_key() -> str:
 
 
 # -------------------------
-# TX Helper
+# TX helper
 # -------------------------
-def sign_and_send_tx(w3: Web3, contract, function_name: str, args, priv_key: str,
-                     nonce: int, gas_limit: int = 200_000):
+def sign_and_send_tx(
+    w3: Web3,
+    contract,
+    function_name: str,
+    args,
+    priv_key: str,
+    nonce: int,
+    gas_limit: int = 200_000,
+):
     """
-    Sign and send a transaction to a contract function, with robust handling of rawTransaction attribute.
-    Returns (success: bool, new_nonce: int).
+    Sign and send a transaction to a contract function.
+    Returns (success: bool, new_nonce: int)
     """
     acct = Account.from_key(priv_key)
     print(f"📝 Sending {function_name} with nonce={nonce}, gas={gas_limit}")
 
     try:
         fn = getattr(contract.functions, function_name)(*args)
-        tx = fn.build_transaction({
-            "from": acct.address,
-            "nonce": nonce,
-            "chainId": w3.eth.chain_id,
-            "gas": gas_limit,
-            "gasPrice": w3.eth.gas_price,
-        })
+        tx = fn.build_transaction(
+            {
+                "from": acct.address,
+                "nonce": nonce,
+                "chainId": w3.eth.chain_id,
+                "gas": gas_limit,
+                "gasPrice": w3.eth.gas_price,
+            }
+        )
 
         signed = w3.eth.account.sign_transaction(tx, priv_key)
 
-        # Compatibility with different eth-account versions
+        # Compatibility with eth-account versions
         raw_tx = getattr(signed, "rawTransaction", None)
         if raw_tx is None:
             raw_tx = getattr(signed, "raw_transaction")
@@ -107,14 +118,19 @@ def sign_and_send_tx(w3: Web3, contract, function_name: str, args, priv_key: str
 
 
 # -------------------------
-# Main Bridge Logic
+# Main bridge logic
 # -------------------------
 def scan_blocks(chain: str, contract_info: str = "contract_info.json") -> int:
     """
-    Main entry point used by the autograder.
-    chain: "source" or "destination"
-    - On "source": read Deposit events on AVAX → call wrap() on BSC.
-    - On "destination": read Unwrap events on BSC → call withdraw() on AVAX.
+    Entry point called by autograder.
+
+    chain == "source":
+        - Read Deposit events on AVAX Source
+        - For each Deposit(token, recipient, amount), call wrap(token, recipient, amount) on BSC Destination.
+
+    chain == "destination":
+        - Read Unwrap events on BSC Destination
+        - For each Unwrap(token, recipient, amount), call withdraw(token, recipient, amount) on AVAX Source.
     """
     # Load key & account
     priv_key = load_private_key()
@@ -122,7 +138,8 @@ def scan_blocks(chain: str, contract_info: str = "contract_info.json") -> int:
     print(f"🔑 Warden Address: {warden.address}")
 
     # Load contract metadata
-    source_info, dest_info = get_contracts_info(contract_info)
+    src_info = get_contract_info("source", contract_info)
+    dst_info = get_contract_info("destination", contract_info)
 
     # Connect to both chains
     w3_source = connect_to("source")
@@ -130,46 +147,45 @@ def scan_blocks(chain: str, contract_info: str = "contract_info.json") -> int:
 
     # Instantiate contracts
     source_contract = w3_source.eth.contract(
-        address=source_info["address"],
-        abi=source_info["abi"],
+        address=src_info["address"], abi=src_info["abi"]
     )
     dest_contract = w3_dest.eth.contract(
-        address=dest_info["address"],
-        abi=dest_info["abi"],
+        address=dst_info["address"], abi=dst_info["abi"]
     )
 
     # ---------------------------------------------------
-    # Case 1: Source side -> handle Deposit → wrap()
+    # Case 1: Source side → handle Deposit → wrap()
     # ---------------------------------------------------
     if chain == "source":
         print("🔍 Checking for Deposit events → calling wrap() on destination...")
 
         latest_block = w3_source.eth.block_number
-        from_block = max(latest_block - 200, 0)  # scan last ~200 blocks
+        from_block = max(latest_block - 200, 0)  # scan recent blocks
 
         try:
-            deposit_filter = source_contract.events.Deposit.createFilter(
-                fromBlock=from_block,
-                toBlock=latest_block,
+            # web3.py v6: get_logs(from_block=..., to_block=...)
+            deposit_events = source_contract.events.Deposit.get_logs(
+                from_block=from_block, to_block=latest_block
             )
-            events = deposit_filter.get_all_entries()
         except Exception as e:
-            print(f"❌ Error creating/fetching Deposit filter: {e}")
+            print(f"❌ Error fetching Deposit logs: {e}")
             return 0
 
-        if not events:
+        if not deposit_events:
             print("ℹ️ No Deposit events found in recent blocks.")
             return 1
 
-        # Use nonce on destination (BSC) for wrap calls
+        # Use nonce on destination (BSC) for wrap() calls
         nonce = w3_dest.eth.get_transaction_count(warden.address)
 
-        for ev in events:
+        for ev in deposit_events:
             token = ev["args"]["token"]
             recipient = ev["args"]["recipient"]
             amount = ev["args"]["amount"]
 
-            print(f"➡️ Detected Deposit: token={token}, recipient={recipient}, amount={amount}")
+            print(
+                f"➡️ Detected Deposit: token={token}, recipient={recipient}, amount={amount}"
+            )
 
             ok, nonce = sign_and_send_tx(
                 w3_dest,
@@ -188,37 +204,39 @@ def scan_blocks(chain: str, contract_info: str = "contract_info.json") -> int:
         return 1
 
     # ---------------------------------------------------
-    # Case 2: Destination side -> handle Unwrap → withdraw()
+    # Case 2: Destination side → handle Unwrap → withdraw()
     # ---------------------------------------------------
-    elif chain == "destination":
-        print("🔍 Checking for Unwrap events → calling withdraw() on source...")
+    if chain == "destination":
+        print(
+            "🔍 Checking for Unwrap events → calling withdraw() on source..."
+        )
 
         latest_block = w3_dest.eth.block_number
         from_block = max(latest_block - 200, 0)
 
         try:
-            unwrap_filter = dest_contract.events.Unwrap.createFilter(
-                fromBlock=from_block,
-                toBlock=latest_block,
+            unwrap_events = dest_contract.events.Unwrap.get_logs(
+                from_block=from_block, to_block=latest_block
             )
-            events = unwrap_filter.get_all_entries()
         except Exception as e:
-            print(f"❌ Error creating/fetching Unwrap filter: {e}")
+            print(f"❌ Error fetching Unwrap logs: {e}")
             return 0
 
-        if not events:
+        if not unwrap_events:
             print("ℹ️ No Unwrap events found in recent blocks.")
             return 1
 
-        # Use nonce on source (AVAX) for withdraw calls
+        # Use nonce on source (AVAX) for withdraw() calls
         nonce = w3_source.eth.get_transaction_count(warden.address)
 
-        for ev in events:
+        for ev in unwrap_events:
             token = ev["args"]["token"]
             recipient = ev["args"]["recipient"]
             amount = ev["args"]["amount"]
 
-            print(f"➡️ Detected Unwrap: token={token}, recipient={recipient}, amount={amount}")
+            print(
+                f"➡️ Detected Unwrap: token={token}, recipient={recipient}, amount={amount}"
+            )
 
             ok, nonce = sign_and_send_tx(
                 w3_source,
@@ -236,13 +254,12 @@ def scan_blocks(chain: str, contract_info: str = "contract_info.json") -> int:
 
         return 1
 
-    else:
-        print(f"❌ scan_blocks called with invalid chain argument: {chain}")
-        return 0
+    print(f"❌ Invalid chain argument to scan_blocks: {chain}")
+    return 0
 
 
 # -------------------------
-# Local manual test
+# Local testing
 # -------------------------
 if __name__ == "__main__":
     print("🚀 Testing scan_blocks('source')")
