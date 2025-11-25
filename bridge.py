@@ -65,12 +65,10 @@ def load_private_key():
     return priv_key
 
 
-def sign_and_send_transaction(w3, contract, function_name, args, private_key, gas_limit=200000):
-    """Helper function to sign and send transactions with error handling"""
+def sign_and_send_transaction(w3, contract, function_name, args, private_key, gas_limit=300000):
     try:
         account = Account.from_key(private_key)
         
-        # Build transaction
         nonce = w3.eth.get_transaction_count(account.address)
         
         transaction = getattr(contract.functions, function_name)(*args).build_transaction({
@@ -80,19 +78,24 @@ def sign_and_send_transaction(w3, contract, function_name, args, private_key, ga
             'nonce': nonce,
         })
         
-        # Sign and send
         signed_txn = w3.eth.account.sign_transaction(transaction, private_key)
-        tx_hash = w3.eth.send_raw_transaction(signed_txn.rawTransaction)
+        
+        # Try both attribute names for compatibility
+        if hasattr(signed_txn, 'rawTransaction'):
+            raw_tx = signed_txn.rawTransaction
+        else:
+            raw_tx = signed_txn.raw_transaction
+            
+        tx_hash = w3.eth.send_raw_transaction(raw_tx)
         
         print(f"{function_name} transaction sent: {tx_hash.hex()}")
         
-        # Wait for receipt
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
         if receipt.status == 1:
-            print(f"{function_name} transaction successful in block {receipt.blockNumber}")
+            print(f"{function_name} successful in block {receipt.blockNumber}")
             return True
         else:
-            print(f" {function_name} transaction failed")
+            print(f"{function_name} failed")
             return False
             
     except Exception as e:
