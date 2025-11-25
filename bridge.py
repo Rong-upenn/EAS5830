@@ -16,11 +16,16 @@ def connect_to(chain):
     # 使用你自己的API端点（可选）
     if chain == 'source':  # AVAX
         # api_url = "https://api.avax-test.network/ext/bc/C/rpc"  # 默认
-        api_url = os.getenv('AVAX_RPC_URL', "https://api.avax-test.network/ext/bc/C/rpc")  # 你的自定义URL
+        api_url = os.getenv('AVAX_RPC_URL', "https://api.avax-test.network/ext/bc/C/rpc") 
+        SOURCE_CONTRACT = "0xcBa996812Cd41Cc6420D9b8C3beBBAeCFAbF31F8"   # Fuji Source
+
+
 
     if chain == 'destination':  # BSC
         # api_url = "https://data-seed-prebsc-1-s1.binance.org:8545/"  # 默认
-        api_url = os.getenv('BSC_RPC_URL', "https://data-seed-prebsc-1-s1.binance.org:8545/")  # 你的自定义URL
+        api_url = os.getenv('BSC_RPC_URL', "https://data-seed-prebsc-1-s1.binance.org:8545/")
+        DESTINATION_CONTRACT = "0x34BF48ba635968E0c4b620776FdFddc330e6C211" # BSC Destination
+
 
     w3 = Web3(Web3.HTTPProvider(api_url))
     # inject the poa compatibility middleware to the innermost layer
@@ -80,19 +85,19 @@ def sign_and_send_transaction(w3, contract, function_name, args, private_key, ga
         signed_txn = w3.eth.account.sign_transaction(transaction, private_key)
         tx_hash = w3.eth.send_raw_transaction(signed_txn.rawTransaction)
         
-        print(f"✅ {function_name} transaction sent: {tx_hash.hex()}")
+        print(f"{function_name} transaction sent: {tx_hash.hex()}")
         
         # Wait for receipt
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
         if receipt.status == 1:
-            print(f"✅ {function_name} transaction successful in block {receipt.blockNumber}")
+            print(f"{function_name} transaction successful in block {receipt.blockNumber}")
             return True
         else:
-            print(f"❌ {function_name} transaction failed")
+            print(f" {function_name} transaction failed")
             return False
             
     except Exception as e:
-        print(f"❌ Error in {function_name}: {e}")
+        print(f"Error in {function_name}: {e}")
         return False
 
 
@@ -175,12 +180,12 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 )
                 
                 if success:
-                    print("✅ Successfully processed Deposit -> Wrap")
+                    print("Successfully processed Deposit -> Wrap")
                 else:
-                    print("❌ Failed to process Deposit -> Wrap")
+                    print("Failed to process Deposit -> Wrap")
                     
         except Exception as e:
-            print(f"❌ Error scanning Deposit events: {e}")
+            print(f"Error scanning Deposit events: {e}")
     
     elif chain == 'destination':
         # Scan for Unwrap events on destination and call withdraw on source
@@ -221,12 +226,12 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 )
                 
                 if success:
-                    print("✅ Successfully processed Unwrap -> Withdraw")
+                    print("Successfully processed Unwrap -> Withdraw")
                 else:
-                    print("❌ Failed to process Unwrap -> Withdraw")
+                    print("Failed to process Unwrap -> Withdraw")
                     
         except Exception as e:
-            print(f"❌ Error scanning Unwrap events: {e}")
+            print(f"Error scanning Unwrap events: {e}")
     
     return 1
 
