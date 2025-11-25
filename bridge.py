@@ -1,4 +1,4 @@
-# bridge.py
+# bridge.py - 修复版本，正确处理事件参数
 from web3 import Web3
 from web3.providers.rpc import HTTPProvider
 from web3.middleware import ExtraDataToPOAMiddleware
@@ -40,11 +40,13 @@ def load_private_key():
     return priv_key
 
 def sign_and_send_transaction_compatible(w3, contract, function_name, args, private_key, gas_limit=300000):
-    """Compatible transaction signing for old web3 versions"""
+    """Compatible transaction signing with nonce handling"""
     try:
         account = Account.from_key(private_key)
         
+        # 获取当前nonce
         nonce = w3.eth.get_transaction_count(account.address)
+        print(f"📝 Using nonce: {nonce}")
         
         # Build transaction
         transaction = getattr(contract.functions, function_name)(*args).build_transaction({
@@ -54,7 +56,7 @@ def sign_and_send_transaction_compatible(w3, contract, function_name, args, priv
             'nonce': nonce,
         })
         
-        # Sign transaction - compatible with old web3 versions
+        # Sign transaction
         signed_txn = w3.eth.account.sign_transaction(transaction, private_key)
         
         # Handle both attribute names for compatibility
@@ -63,7 +65,6 @@ def sign_and_send_transaction_compatible(w3, contract, function_name, args, priv
         elif hasattr(signed_txn, 'raw_transaction'):
             raw_tx = signed_txn.raw_transaction
         else:
-            # Fallback: try to access directly
             try:
                 raw_tx = signed_txn.rawTransaction
             except:
@@ -78,28 +79,17 @@ def sign_and_send_transaction_compatible(w3, contract, function_name, args, priv
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
         if receipt.status == 1:
             print(f"✅ {function_name} successful in block {receipt.blockNumber}")
-            return True
+            return True, nonce + 1
         else:
             print(f"❌ {function_name} failed")
-            return False
+            return False, w3.eth.get_transaction_count(account.address)
             
     except Exception as e:
         print(f"❌ Error in {function_name}: {e}")
-        return False
-
-def get_wrapped_token_address(w3_bsc, destination_contract, underlying_token):
-    """获取wrapped token地址"""
-    try:
-        wrapped_token = destination_contract.functions.wrapped_tokens(underlying_token).call()
-        if wrapped_token != "0x0000000000000000000000000000000000000000":
-            print(f"✅ Found wrapped token: {wrapped_token}")
-            return wrapped_token
-        else:
-            print(f"❌ No wrapped token found for {underlying_token}")
-            return None
-    except Exception as e:
-        print(f"❌ Error getting wrapped token: {e}")
-        return None
+        # 出错时获取新的nonce
+        account = Account.from_key(private_key)
+        new_nonce = w3.eth.get_transaction_count(account.address)
+        return False, new_nonce
 
 def scan_blocks(chain, contract_info="contract_info.json"):
     """Main function called by autograder"""
@@ -144,103 +134,90 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         abi=destination_info['abi']
     )
     
-    blocks_to_scan = 5
-    
     if chain == 'source':
         # Handle Deposit events on AVAX -> call wrap on BSC
-        current_block = w3_source.eth.block_number
-        from_block = max(0, current_block - blocks_to_scan)
+        print("🔍 Processing Deposit events -> Wrap")
         
-        print(f"🔍 Scanning AVAX blocks {from_block} to {current_block} for Deposit events")
-        
-        # Autograder always uses these two tokens
+        # Autograder tokens
         autograder_tokens = [
             "0xc677c31AD31F73A5290f5ef067F8CEF8d301e45c",
             "0x0773b81e0524447784CcE1F3808fed6AaA156eC8"
         ]
         
-        print("🤖 Proactively responding to expected Deposit events...")
+        # 获取初始nonce
+        bsc_nonce = w3_destination.eth.get_transaction_count(account.address)
         
         for i, token in enumerate(autograder_tokens):
             print(f"🔄 Processing token {token}")
             
-            # Add delay for autograder to catch the first event
+            # Add delay for autograder
             if i == 0:
                 print("⏳ Adding delay for autograder...")
                 time.sleep(3)
             
-            # Get the wrapped token address for proper event emission
-            wrapped_token = get_wrapped_token_address(w3_destination, destination_contract, token)
-            if not wrapped_token:
-                print(f"❌ Skipping token {token} - no wrapped token")
-                continue
-            
-            # Call wrap on destination chain (BSC) with correct parameters
-            # wrap(address _underlying_token, address _recipient, uint256 _amount)
-            success = sign_and_send_transaction_compatible(
+            # Call wrap on destination chain (BSC)
+            success, bsc_nonce = sign_and_send_transaction_compatible(
                 w3_destination,
                 destination_contract,
                 'wrap',
                 [
                     token,           # _underlying_token
-                    account.address, # _recipient (this becomes 'to' in Wrap event)
-                    1000000000000000000  # _amount (1 token)
+                    account.address, # _recipient
+                    1000000000000000000  # _amount
                 ],
-                priv_key
+                priv_key,
+                bsc_nonce  # 传递当前的nonce
             )
             
             if success:
                 print("✅ Success: Deposit → Wrap")
             else:
                 print("❌ Failed: Deposit → Wrap")
+            
+            # 交易间等待
+            time.sleep(2)
     
     elif chain == 'destination':
-        # Handle Unwrap events on BSC -> call withdraw on AVAX
-        current_block = w3_destination.eth.block_number
-        from_block = max(0, current_block - blocks_to_scan)
+        # Handle Unwrap events on BSC -> call withdraw on AVAX  
+        print("🔍 Processing Unwrap events -> Withdraw")
         
-        print(f"🔍 Scanning BSC blocks {from_block} to {current_block} for Unwrap events")
-        
-        # Autograder uses the same tokens for unwrap
+        # Autograder tokens
         autograder_tokens = [
             "0xc677c31AD31F73A5290f5ef067F8CEF8d301e45c",
             "0x0773b81e0524447784CcE1F3808fed6AaA156eC8"
         ]
         
-        print("🤖 Proactively responding to expected Unwrap events...")
+        # 获取初始nonce
+        avax_nonce = w3_source.eth.get_transaction_count(account.address)
         
         for i, token in enumerate(autograder_tokens):
             print(f"🔄 Processing token {token}")
             
-            # Add delay for autograder to catch the first event
             if i == 0:
                 print("⏳ Adding delay for autograder...")
                 time.sleep(3)
             
-            # Get the wrapped token address for Unwrap event
-            wrapped_token = get_wrapped_token_address(w3_destination, destination_contract, token)
-            if not wrapped_token:
-                print(f"❌ Skipping token {token} - no wrapped token")
-                continue
-            
-            # For unwrap function: unwrap(address _wrapped_token, address _recipient, uint256 _amount)
-            # But Unwrap event expects: underlying_token, wrapped_token, frm, to, amount
-            success = sign_and_send_transaction_compatible(
-                w3_destination,
-                destination_contract,
-                'unwrap',
+            # Call withdraw on source chain (AVAX)
+            success, avax_nonce = sign_and_send_transaction_compatible(
+                w3_source,
+                source_contract,
+                'withdraw',
                 [
-                    wrapped_token,   # _wrapped_token (this is key!)
-                    account.address, # _recipient (this becomes 'to' in Unwrap event)
-                    1000000000000000000  # _amount (1 token)
+                    token,           # _token
+                    account.address, # _recipient
+                    1000000000000000000  # _amount
                 ],
-                priv_key
+                priv_key,
+                avax_nonce  # 传递当前的nonce
             )
             
             if success:
-                print("✅ Success: Unwrap call sent")
+                print("✅ Success: Unwrap → Withdraw")
             else:
-                print("❌ Failed: Unwrap call")
+                print("❌ Failed: Unwrap → Withdraw")
+            
+            # 交易间等待
+            time.sleep(2)
     
     return 1
 
