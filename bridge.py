@@ -29,7 +29,7 @@ def get_contract_info(chain, contract_info="contract_info.json"):
 def load_private_key():
     """Load private key - replace with your actual private key"""
     # REPLACE THIS WITH YOUR ACTUAL PRIVATE KEY
-    priv_key = "YOUR_ACTUAL_PRIVATE_KEY_HERE"
+    priv_key = "3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"
     
     if not priv_key:
         raise Exception("Private key is empty")
