@@ -1,4 +1,4 @@
-# bridge.py - FINAL VERSION FOR AUTOGRADER
+# bridge.py - ULTIMATE ROBUST VERSION
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 from eth_account import Account
@@ -73,8 +73,27 @@ def send_tx(w3, contract, func, args, pk, nonce, gas=200000):
         return False, w3.eth.get_transaction_count(acct.address)
 
 # ----------------------
-# Manual event scanning for Unwrap events
+# Event decoding functions
 # ----------------------
+def decode_deposit_event(log):
+    """Decode Deposit event manually"""
+    deposit_signature = "0x5548c837ab068cf56a2c2479df0882a4922fd203edb7517321831d95078c5f62"
+    
+    if len(log['topics']) > 0 and log['topics'][0].hex() == deposit_signature:
+        if len(log['topics']) == 3:  # signature + 2 indexed params
+            token = Web3.to_checksum_address(log['topics'][1][12:].hex())
+            recipient = Web3.to_checksum_address(log['topics'][2][12:].hex())
+            amount = int(log['data'], 16) if log['data'] != '0x' else 0
+            
+            return {
+                'args': {
+                    'token': token,
+                    'recipient': recipient,
+                    'amount': amount
+                }
+            }
+    return None
+
 def decode_unwrap_event(log):
     """Decode Unwrap event manually - all parameters in data"""
     unwrap_signature = "0xbe8e6aacbb5d99c99f1992d91d807f570d0acacabee02374369ed42710dc6698"
@@ -101,30 +120,52 @@ def decode_unwrap_event(log):
             }
     return None
 
-def get_events_manual(w3, contract_address, from_block, to_block):
-    """Get all events manually by scanning blocks"""
+def scan_blocks_for_events(w3, contract_address, from_block, to_block, event_type):
+    """Scan blocks for specific events with detailed logging"""
     events = []
+    print(f"🔍 Scanning blocks {from_block} to {to_block} for {event_type} events...")
+    
+    blocks_scanned = 0
+    blocks_with_contract_txs = 0
+    
     for block_num in range(from_block, to_block + 1):
         try:
             block = w3.eth.get_block(block_num, full_transactions=True)
+            blocks_scanned += 1
+            
+            contract_txs_in_block = 0
             for tx in block.transactions:
                 if isinstance(tx, dict) and tx.get('to') and tx['to'].lower() == contract_address.lower():
+                    contract_txs_in_block += 1
                     try:
                         receipt = w3.eth.get_transaction_receipt(tx['hash'])
                         for log in receipt.logs:
                             if log['address'].lower() == contract_address.lower():
-                                events.append({
-                                    'blockNumber': block_num,
-                                    'log': log
-                                })
-                    except:
+                                if event_type == "Deposit":
+                                    decoded = decode_deposit_event(log)
+                                elif event_type == "Unwrap":
+                                    decoded = decode_unwrap_event(log)
+                                
+                                if decoded:
+                                    events.append(decoded)
+                                    print(f"✅ Found {event_type} event in block {block_num}, tx: {tx['hash'].hex()}")
+                                    print(f"   Details: {decoded['args']}")
+                    except Exception as e:
                         continue
-        except:
+            
+            if contract_txs_in_block > 0:
+                blocks_with_contract_txs += 1
+                print(f"📦 Block {block_num}: {contract_txs_in_block} contract transactions")
+                        
+        except Exception as e:
+            # Skip blocks that can't be read
             continue
+    
+    print(f"📊 Scan completed: {blocks_scanned} blocks scanned, {blocks_with_contract_txs} blocks with contract txs, {len(events)} {event_type} events found")
     return events
 
 # ----------------------
-# Event-driven bridge logic - MAIN FUNCTION AUTOGRADER CALLS
+# Event-driven bridge logic - MAIN FUNCTION
 # ----------------------
 def scan_blocks(chain, info_path="contract_info.json"):
     # Load key + account
@@ -148,48 +189,32 @@ def scan_blocks(chain, info_path="contract_info.json"):
     # 1. Source → wrap (Deposit → Wrap)
     # --------------------------
     if chain == "source":
-        print("🔍 Checking for Deposit events → sending wrap() ...")
+        print("=" * 50)
+        print("🔍 CHECKING FOR DEPOSIT EVENTS → CALLING WRAP()")
+        print("=" * 50)
 
-        # Get recent blocks
+        # Scan a very large range to catch all events
         latest_block = w3_src.eth.block_number
-        from_block = max(latest_block - 1000, 0)
+        from_block = max(latest_block - 20000, 0)  # Scan last 20,000 blocks
+        print(f"📊 Block range: {from_block} to {latest_block} (total: {latest_block - from_block} blocks)")
 
-        try:
-            # Try standard method first
-            events = source.events.Deposit().get_logs(fromBlock=from_block, toBlock=latest_block)
-        except:
-            # Fallback to manual scanning
-            print("⚠️ Using manual event scanning")
-            all_events = get_events_manual(w3_src, source_info["address"], from_block, latest_block)
-            events = []
-            for event in all_events:
-                log = event['log']
-                if len(log['topics']) > 0:
-                    deposit_sig = "0x5548c837ab068cf56a2c2479df0882a4922fd203edb7517321831d95078c5f62"
-                    if log['topics'][0].hex() == deposit_sig and len(log['topics']) == 3:
-                        token = Web3.to_checksum_address(log['topics'][1][12:].hex())
-                        recipient = Web3.to_checksum_address(log['topics'][2][12:].hex())
-                        amount = int(log['data'], 16) if log['data'] != '0x' else 0
-                        events.append({
-                            'args': {
-                                'token': token,
-                                'recipient': recipient,
-                                'amount': amount
-                            }
-                        })
+        events = scan_blocks_for_events(w3_src, source_info["address"], from_block, latest_block, "Deposit")
 
         if not events:
-            print("ℹ️ No Deposit events found.")
+            print("❌ No Deposit events found in scanned blocks.")
             return 1
 
+        print(f"🎯 Processing {len(events)} Deposit events...")
         nonce = w3_dst.eth.get_transaction_count(acct.address)
+        print(f"📝 Starting nonce on destination: {nonce}")
 
+        success_count = 0
         for ev in events:
             token = ev["args"]["token"]
             recipient = ev["args"]["recipient"]
             amount = ev["args"]["amount"]
 
-            print(f"➡️ Deposit detected: token={token}, recipient={recipient}, amount={amount}")
+            print(f"➡️ Processing Deposit: token={token}, recipient={recipient}, amount={amount}")
 
             ok, nonce = send_tx(
                 w3_dst, dest, "wrap",
@@ -199,40 +224,43 @@ def scan_blocks(chain, info_path="contract_info.json"):
 
             if ok:
                 print("🎉 Deposit → Wrap OK")
+                success_count += 1
             else:
                 print("❌ Deposit → Wrap FAILED")
 
+        print(f"📈 Summary: {success_count}/{len(events)} Deposit events successfully bridged")
         return 1
 
     # --------------------------
     # 2. Destination → withdraw (Unwrap → Withdraw)
     # --------------------------
     if chain == "destination":
-        print("🔍 Checking for Unwrap events → sending withdraw() ...")
+        print("=" * 50)
+        print("🔍 CHECKING FOR UNWRAP EVENTS → CALLING WITHDRAW()")
+        print("=" * 50)
 
+        # Scan a very large range to catch all events
         latest_block = w3_dst.eth.block_number
-        from_block = max(latest_block - 1000, 0)
+        from_block = max(latest_block - 20000, 0)  # Scan last 20,000 blocks
+        print(f"📊 Block range: {from_block} to {latest_block} (total: {latest_block - from_block} blocks)")
 
-        # Use manual scanning for Unwrap events (due to signature mismatch)
-        all_events = get_events_manual(w3_dst, dest_info["address"], from_block, latest_block)
-        events = []
-        for event in all_events:
-            decoded = decode_unwrap_event(event['log'])
-            if decoded:
-                events.append(decoded)
+        events = scan_blocks_for_events(w3_dst, dest_info["address"], from_block, latest_block, "Unwrap")
 
         if not events:
-            print("ℹ️ No Unwrap events found.")
+            print("❌ No Unwrap events found in scanned blocks.")
             return 1
 
+        print(f"🎯 Processing {len(events)} Unwrap events...")
         nonce = w3_src.eth.get_transaction_count(acct.address)
+        print(f"📝 Starting nonce on source: {nonce}")
 
+        success_count = 0
         for ev in events:
             token = ev["args"]["token"]
             recipient = ev["args"]["recipient"]
             amount = ev["args"]["amount"]
 
-            print(f"➡️ Unwrap detected: token={token}, recipient={recipient}, amount={amount}")
+            print(f"➡️ Processing Unwrap: token={token}, recipient={recipient}, amount={amount}")
 
             ok, nonce = send_tx(
                 w3_src, source, "withdraw",
@@ -242,9 +270,11 @@ def scan_blocks(chain, info_path="contract_info.json"):
 
             if ok:
                 print("🎉 Unwrap → Withdraw OK")
+                success_count += 1
             else:
                 print("❌ Unwrap → Withdraw FAILED")
 
+        print(f"📈 Summary: {success_count}/{len(events)} Unwrap events successfully bridged")
         return 1
 
     return 1
