@@ -13,9 +13,9 @@ def connect_to(chain: str) -> Web3:
     Connect to AVAX Fuji (source) or BSC Testnet (destination).
     """
     if chain == "source":  # Avalanche Fuji
-        rpc_url = "https://api.avax-test.network/ext/bc/C/rpc"
+        rpc_url = "https://endpoints.omniatech.io/v1/avax/fuji/public"
     elif chain == "destination":  # BSC Testnet
-        rpc_url = "https://data-seed-prebsc-1-s1.binance.org:8545/"
+        rpc_url = "https://bsc-testnet-rpc.publicnode.com"
     else:
         raise ValueError(f"Unknown chain: {chain}")
 
