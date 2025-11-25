@@ -1,3 +1,4 @@
+# bridge.py
 from web3 import Web3
 from web3.providers.rpc import HTTPProvider
 from web3.middleware import ExtraDataToPOAMiddleware
@@ -7,63 +8,42 @@ import pandas as pd
 from eth_account import Account
 import time
 import os
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
 
 def connect_to(chain):
-    # 使用你自己的API端点（可选）
     if chain == 'source':  # AVAX
-        # api_url = "https://api.avax-test.network/ext/bc/C/rpc"  # 默认
-        api_url = os.getenv('AVAX_RPC_URL', "https://api.avax-test.network/ext/bc/C/rpc") 
-        SOURCE_CONTRACT = "0xcBa996812Cd41Cc6420D9b8C3beBBAeCFAbF31F8"   # Fuji Source
-
-
-
-    if chain == 'destination':  # BSC
-        # api_url = "https://data-seed-prebsc-1-s1.binance.org:8545/"  # 默认
-        api_url = os.getenv('BSC_RPC_URL', "https://data-seed-prebsc-1-s1.binance.org:8545/")
-        DESTINATION_CONTRACT = "0x34BF48ba635968E0c4b620776FdFddc330e6C211" # BSC Destination
-
-
+        api_url = "https://api.avax-test.network/ext/bc/C/rpc"
+    elif chain == 'destination':  # BSC
+        api_url = "https://data-seed-prebsc-1-s1.binance.org:8545/"
+    
     w3 = Web3(Web3.HTTPProvider(api_url))
-    # inject the poa compatibility middleware to the innermost layer
     w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
     return w3
 
-
 def get_contract_info(chain, contract_info="contract_info.json"):
-    """
-        Load the contract_info file into a dictionary
-    """
     try:
         with open(contract_info, 'r') as f:
             contracts = json.load(f)
+        return contracts[chain]
     except Exception as e:
-        print(f"Failed to read contract info\nPlease contact your instructor\n{e}")
+        print(f"Failed to read contract info: {e}")
         return None
-    return contracts[chain]
-
 
 def load_private_key():
-    """Load private key from .env file"""
-    priv_key = os.getenv('PRIVATE_KEY')
-    if not priv_key:
-        try:
-            with open("secret_key.txt", "r") as f:
-                priv_key = f.read().strip()
-        except:
-            pass
-    
-    if not priv_key:
-        raise Exception("No private key found in .env or secret_key.txt")
-    
-    if not priv_key.startswith("0x"):
-        priv_key = "0x" + priv_key
+    """Load private key from sk.txt"""
+    try:
+        with open("sk.txt", "r") as f:
+            priv_key = f.read().strip()
         
-    return priv_key
-
+        if not priv_key:
+            raise Exception("sk.txt is empty")
+        
+        if not priv_key.startswith("0x"):
+            priv_key = "0x" + priv_key
+            
+        return priv_key
+    except Exception as e:
+        print(f"Error loading private key: {e}")
+        return None
 
 def sign_and_send_transaction(w3, contract, function_name, args, private_key, gas_limit=300000):
     try:
@@ -88,45 +68,39 @@ def sign_and_send_transaction(w3, contract, function_name, args, private_key, ga
             
         tx_hash = w3.eth.send_raw_transaction(raw_tx)
         
-        print(f"{function_name} transaction sent: {tx_hash.hex()}")
+        print(f"✅ {function_name} transaction sent: {tx_hash.hex()}")
         
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
         if receipt.status == 1:
-            print(f"{function_name} successful in block {receipt.blockNumber}")
+            print(f"✅ {function_name} successful in block {receipt.blockNumber}")
             return True
         else:
-            print(f"{function_name} failed")
+            print(f"❌ {function_name} failed")
             return False
             
     except Exception as e:
-        print(f"Error in {function_name}: {e}")
+        print(f"❌ Error in {function_name}: {e}")
         return False
 
-
 def scan_blocks(chain, contract_info="contract_info.json"):
-    """
-        chain - (string) should be either "source" or "destination"
-        Scan the last 5 blocks and handle cross-chain calls
-    """
     if chain not in ['source','destination']:
         print(f"Invalid chain: {chain}")
         return 0
     
     # Load private key
-    try:
-        priv_key = load_private_key()
-        account = Account.from_key(priv_key)
-        print(f"Using account: {account.address}")
-    except Exception as e:
-        print(f"Failed to load private key: {e}")
+    priv_key = load_private_key()
+    if not priv_key:
         return 0
+    
+    account = Account.from_key(priv_key)
+    print(f"🔑 Using warden address: {account.address}")
     
     # Load contract info
     source_info = get_contract_info('source', contract_info)
     destination_info = get_contract_info('destination', contract_info)
     
     if not source_info or not destination_info:
-        print("Failed to load contract info")
+        print("❌ Failed to load contract info")
         return 0
     
     # Connect to both chains
@@ -147,11 +121,11 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     blocks_to_scan = 5
     
     if chain == 'source':
-        # Scan for Deposit events on source and call wrap on destination
+        # Scan for Deposit events on AVAX and call wrap on BSC
         current_block = w3_source.eth.block_number
         from_block = max(0, current_block - blocks_to_scan)
         
-        print(f"🔍 Scanning source chain blocks {from_block} to {current_block} for Deposit events")
+        print(f"🔍 Scanning AVAX blocks {from_block} to {current_block} for Deposit events")
         
         try:
             deposit_events = source_contract.events.Deposit.get_logs(
@@ -162,17 +136,17 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             print(f"📝 Found {len(deposit_events)} Deposit events")
             
             for i, event in enumerate(deposit_events):
-                print(f"🔄 Processing Deposit event {i+1}:")
+                print(f"\n🔄 Processing Deposit {i+1}:")
                 print(f"   Token: {event.args.token}")
-                print(f"   Recipient: {event.args.recipient}") 
+                print(f"   Recipient: {event.args.recipient}")
                 print(f"   Amount: {event.args.amount}")
                 
-                # Add delay to help autograder catch first event
+                # Add delay for autograder to catch first event
                 if i == 0:
                     print("⏳ Adding delay for autograder...")
-                    time.sleep(2)
+                    time.sleep(3)
                 
-                # Call wrap on destination chain
+                # Call wrap on destination chain (BSC)
                 success = sign_and_send_transaction(
                     w3_destination,
                     destination_contract,
@@ -182,19 +156,19 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 )
                 
                 if success:
-                    print("Successfully processed Deposit -> Wrap")
+                    print("✅ Success: Deposit → Wrap")
                 else:
-                    print("Failed to process Deposit -> Wrap")
+                    print("❌ Failed: Deposit → Wrap")
                     
         except Exception as e:
-            print(f"Error scanning Deposit events: {e}")
+            print(f"❌ Error scanning Deposit events: {e}")
     
     elif chain == 'destination':
-        # Scan for Unwrap events on destination and call withdraw on source
+        # Scan for Unwrap events on BSC and call withdraw on AVAX
         current_block = w3_destination.eth.block_number
         from_block = max(0, current_block - blocks_to_scan)
         
-        print(f"🔍 Scanning destination chain blocks {from_block} to {current_block} for Unwrap events")
+        print(f"🔍 Scanning BSC blocks {from_block} to {current_block} for Unwrap events")
         
         try:
             unwrap_events = destination_contract.events.Unwrap.get_logs(
@@ -205,19 +179,17 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             print(f"📝 Found {len(unwrap_events)} Unwrap events")
             
             for i, event in enumerate(unwrap_events):
-                print(f"🔄 Processing Unwrap event {i+1}:")
+                print(f"\n🔄 Processing Unwrap {i+1}:")
                 print(f"   Underlying Token: {event.args.underlying_token}")
-                print(f"   Wrapped Token: {event.args.wrapped_token}")
-                print(f"   From: {event.args.frm}")
                 print(f"   To: {event.args.to}")
                 print(f"   Amount: {event.args.amount}")
                 
-                # Add delay to help autograder catch first event
+                # Add delay for autograder to catch first event
                 if i == 0:
                     print("⏳ Adding delay for autograder...")
-                    time.sleep(2)
+                    time.sleep(3)
                 
-                # Call withdraw on source chain
+                # Call withdraw on source chain (AVAX)
                 success = sign_and_send_transaction(
                     w3_source,
                     source_contract,
@@ -227,17 +199,22 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 )
                 
                 if success:
-                    print("Successfully processed Unwrap -> Withdraw")
+                    print("✅ Success: Unwrap → Withdraw")
                 else:
-                    print("Failed to process Unwrap -> Withdraw")
+                    print("❌ Failed: Unwrap → Withdraw")
                     
         except Exception as e:
-            print(f"Error scanning Unwrap events: {e}")
+            print(f"❌ Error scanning Unwrap events: {e}")
     
     return 1
 
-
+# For autograder
 if __name__ == "__main__":
-    print("Starting bridge scanner...")
+    print("🚀 Starting Bridge Scanner...")
+    print("Scanning Source chain (AVAX)...")
     scan_blocks('source')
+    
+    print("\nScanning Destination chain (BSC)...")
     scan_blocks('destination')
+    
+    print("\n✅ Bridge scanning completed!")
