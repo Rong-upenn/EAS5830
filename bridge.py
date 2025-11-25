@@ -4,7 +4,6 @@ from web3.providers.rpc import HTTPProvider
 from web3.middleware import ExtraDataToPOAMiddleware
 from datetime import datetime
 import json
-import pandas as pd
 from eth_account import Account
 import time
 import os
@@ -13,7 +12,7 @@ def connect_to(chain):
     if chain == 'source':  # AVAX
         api_url = "https://api.avax-test.network/ext/bc/C/rpc"
     elif chain == 'destination':  # BSC
-        api_url = "https://data-seed-prebsc-1-s1.binance.org:8545/"
+        api_url = "https://bsc-testnet.publicnode.com"
     
     w3 = Web3(Web3.HTTPProvider(api_url))
     w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
@@ -29,21 +28,14 @@ def get_contract_info(chain, contract_info="contract_info.json"):
         return None
 
 def load_private_key():
-    """Load private key from sk.txt"""
-    try:
-        with open("sk.txt", "r") as f:
-            priv_key = f.read().strip()
+    """Hardcoded private key for autograder"""
+    # REPLACE THIS WITH YOUR ACTUAL PRIVATE KEY
+    priv_key = "3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"
+    
+    if not priv_key.startswith("0x"):
+        priv_key = "0x" + priv_key
         
-        if not priv_key:
-            raise Exception("sk.txt is empty")
-        
-        if not priv_key.startswith("0x"):
-            priv_key = "0x" + priv_key
-            
-        return priv_key
-    except Exception as e:
-        print(f"Error loading private key: {e}")
-        return None
+    return priv_key
 
 def sign_and_send_transaction(w3, contract, function_name, args, private_key, gas_limit=300000):
     try:
