@@ -33,7 +33,7 @@ def getContractInfo(chain):
         contracts = json.load(file)
     return contracts[chain]
 
-def scanBlocks(chain):
+def scan_blocks(chain):
     """
     Scan blocks for events and act upon them.
     """
