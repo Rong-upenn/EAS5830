@@ -7,7 +7,7 @@ from eth_account import Account
 source_chain = 'avax'
 destination_chain = 'bsc'
 contract_info_file = "contract_info.json"
-warden_private_key = "3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"
+warden_private_key = "0x3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"
 
 def connectTo(chain):
     """
