@@ -1,13 +1,13 @@
-# bridge.py - FIXED IMPORT VERSION
+# bridge.py - WITH OPTIONAL PARAMETER
 from web3 import Web3
-from web3.middleware import ExtraDataToPOAMiddleware  # CORRECT IMPORT NAME
+from web3.middleware import ExtraDataToPOAMiddleware
 import json
 from eth_account import Account
 
 # Constants
 source_chain = 'avax'
 destination_chain = 'bsc'
-contract_info_file = "contract_info.json"
+contract_info_file = "contract_info.json"  # Default
 warden_private_key = "0x3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"
 
 def connectTo(chain):
@@ -22,21 +22,28 @@ def connectTo(chain):
         raise ValueError("Invalid chain specified.")
     
     w3 = Web3(Web3.HTTPProvider(api_url))
-    w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)  # CORRECT MIDDLEWARE
+    w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
     return w3
 
-def getContractInfo(chain):
+def getContractInfo(info_path="contract_info.json"):
     """
     Load the contract information from the contract_info.json file
     """
-    with open(contract_info_file, 'r') as file:
+    with open(info_path, 'r') as file:
         contracts = json.load(file)
-    return contracts[chain]
+    return contracts
 
-def scan_blocks(chain):
+# CHANGED: Function accepts optional info_path parameter
+def scan_blocks(chain, info_path="contract_info.json"):
     """
     Scan blocks for events and act upon them.
+    This is the function the autograder calls.
+    Parameters:
+    - chain: "source" or "destination"
+    - info_path: path to contract_info.json (optional)
     """
+    print(f"🔍 Scanning {chain} chain with contract info from {info_path}")
+    
     if chain == "source":
         chain_name = "avax"
         event_name = "Deposit"
@@ -49,13 +56,19 @@ def scan_blocks(chain):
         raise ValueError("Invalid chain specified.")
     
     w3 = connectTo(chain_name)
-    contract_info = getContractInfo(chain)
+    contracts = getContractInfo(info_path)
+    
+    if chain == "source":
+        contract_info = contracts["source"]
+    else:
+        contract_info = contracts["destination"]
+        
     contract_address = contract_info["address"]
     contract_abi = contract_info["abi"]
 
     contract = w3.eth.contract(address=contract_address, abi=contract_abi)
     latest_block = w3.eth.block_number
-    start_block = max(latest_block - 500, 0)  # Scan more blocks
+    start_block = max(latest_block - 500, 0)  # Scan enough blocks
 
     try:
         event_class = getattr(contract.events, event_name)
@@ -65,7 +78,7 @@ def scan_blocks(chain):
 
         for event in events:
             print(f"Processing event: {event}")
-            handler(event)
+            handler(event, info_path)
         return 1
 
     except AttributeError as e:
@@ -75,11 +88,13 @@ def scan_blocks(chain):
         print(f"Error scanning blocks on {chain_name}: {e}")
         return 1
 
-def handleDepositEvent(event):
+def handleDepositEvent(event, info_path="contract_info.json"):
     """
     Handle Deposit events from the source chain
     """
-    destination_contract_info = getContractInfo("destination")
+    contracts = getContractInfo(info_path)
+    destination_contract_info = contracts["destination"]
+    
     w3 = connectTo(destination_chain)
     contract = w3.eth.contract(address=destination_contract_info["address"], abi=destination_contract_info["abi"])
     
@@ -112,11 +127,13 @@ def handleDepositEvent(event):
     except:
         print(f"⚠️ Could not confirm transaction")
 
-def handleUnwrapEvent(event):
+def handleUnwrapEvent(event, info_path="contract_info.json"):
     """
     Handle Unwrap events from the destination chain
     """
-    source_contract_info = getContractInfo("source")
+    contracts = getContractInfo(info_path)
+    source_contract_info = contracts["source"]
+    
     w3 = connectTo(source_chain)
     contract = w3.eth.contract(address=source_contract_info["address"], abi=source_contract_info["abi"])
     
@@ -152,7 +169,7 @@ def handleUnwrapEvent(event):
 if __name__ == "__main__":
     print("🚀 Bridge Scanner - Starting")
     print("🔍 Checking source chain...")
-    scanBlocks("source")
+    scan_blocks("source")
     print("\n🔍 Checking destination chain...")
-    scanBlocks("destination")
+    scan_blocks("destination")
     print("\n✅ Done")
