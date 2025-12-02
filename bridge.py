@@ -88,12 +88,9 @@ def _load():
 # ---------------- Event Handlers ---------------- #
 
 def _scan_deposit(acct, w3s, w3d, src, dst):
-    """
-    Detects Deposit events on Source chain,
-    triggers wrap() on Destination.
-    """
     latest = w3s.eth.block_number
-    from_block = max(latest - FROM_BLOCK_WINDOW, 0)
+    MAX_RANGE = 2048
+    from_block = max(latest - MAX_RANGE, 0)
 
     topic0 = topic("Deposit(address,address,uint256)")
 
@@ -133,13 +130,11 @@ def _scan_deposit(acct, w3s, w3d, src, dst):
         w3d.eth.send_raw_transaction(signed.rawTransaction)
 
 
+
 def _scan_unwrap(acct, w3s, w3d, src, dst):
-    """
-    Detects Unwrap events on Destination chain,
-    triggers withdraw() on Source.
-    """
     latest = w3d.eth.block_number
-    from_block = max(latest - FROM_BLOCK_WINDOW, 0)
+    MAX_RANGE = 2048
+    from_block = max(latest - MAX_RANGE, 0)
 
     topic0 = topic("Unwrap(address,address,address,address,uint256)")
 
@@ -177,6 +172,7 @@ def _scan_unwrap(acct, w3s, w3d, src, dst):
 
         signed = w3s.eth.account.sign_transaction(tx, WARDEN_PRIVATE_KEY)
         w3s.eth.send_raw_transaction(signed.rawTransaction)
+
 
 
 # ---------------- Grader Entry Point ---------------- #
