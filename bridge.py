@@ -7,6 +7,7 @@ from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 from eth_account import Account
 import json
+import time
 
 # --------------------------------------------------------------------
 # RPC endpoints
@@ -34,21 +35,13 @@ def _fix_addr(addr):
 
 def _boosted_gas(w3):
     """Boost gas price a bit to avoid 'replacement transaction underpriced'."""
-    return int(w3.eth.gas_price * 1.2)
+    gas_price = w3.eth.gas_price
+    return int(gas_price * 1.5)  # Increase to 1.5x to avoid underpriced errors
 
 
 def _nonce(w3, acct):
     """Always fetch a fresh nonce to avoid 'nonce too low'."""
     return w3.eth.get_transaction_count(acct.address)
-
-
-def topic(signature_text):
-    """Produce a valid 0x-prefixed keccak hash for event filter topics."""
-    h = Web3.keccak(text=signature_text)
-    hx = h.hex()
-    if not hx.startswith("0x"):
-        hx = "0x" + hx
-    return hx.lower()
 
 
 # ================== Setup ================== #
@@ -83,38 +76,6 @@ def _load():
     return acct, w3s, w3d, src, dst
 
 
-def _scan_blocks_in_batches(w3, contract, event_name, from_block, to_block, batch_size=2048):
-    """
-    Scan blocks in batches to avoid RPC limits.
-    """
-    events = []
-    current_block = from_block
-    
-    while current_block <= to_block:
-        batch_to = min(current_block + batch_size - 1, to_block)
-        
-        try:
-            # Get event logs for this batch
-            event_filter = contract.events[event_name].create_filter(
-                fromBlock=current_block,
-                toBlock=batch_to
-            )
-            batch_events = event_filter.get_all_entries()
-            events.extend(batch_events)
-            
-        except Exception as e:
-            # If batch is still too large, try smaller batch
-            if "requested too many blocks" in str(e):
-                print(f"Batch too large, reducing batch size from {batch_size}...")
-                return _scan_blocks_in_batches(w3, contract, event_name, from_block, to_block, batch_size // 2)
-            else:
-                raise
-        
-        current_block = batch_to + 1
-    
-    return events
-
-
 # ================== Event Handlers ================== #
 
 def _scan_deposit(acct, w3s, w3d, src, dst):
@@ -122,45 +83,66 @@ def _scan_deposit(acct, w3s, w3d, src, dst):
     Grader has sent a Deposit on SOURCE (Avalanche).
     Find Deposit events and call wrap() on DEST (BSC).
     """
+    print("Scanning for Deposit events on source chain...")
+    
     latest = w3s.eth.block_number
-    # Start from a reasonable recent block to avoid scanning too many blocks
-    from_block = max(0, latest - 100)  # Only scan last 100 blocks
+    # Scan from a block that's recent enough for the grader's transaction
+    from_block = max(0, latest - 50)  # Last 50 blocks should be enough
     
     try:
-        # Use batched scanning to avoid RPC limits
-        events = _scan_blocks_in_batches(w3s, src, "Deposit", from_block, latest)
+        # Get Deposit events using get_logs method
+        events = src.events.Deposit.get_logs(fromBlock=from_block, toBlock=latest)
+        print(f"Found {len(events)} Deposit events")
         
-        for log in events:
+        for event in events:
             try:
-                ev = src.events.Deposit().process_log(log)
-                token     = _fix_addr(ev["args"]["token"])
-                recipient = _fix_addr(ev["args"]["recipient"])
-                amount    = int(ev["args"]["amount"])
-
+                token = _fix_addr(event.args.token)
+                recipient = _fix_addr(event.args.recipient)
+                amount = event.args.amount
+                
                 print(f"Processing Deposit: token={token}, recipient={recipient}, amount={amount}")
-
-                # Call wrap() on destination
+                
+                # For the bridge, we need to send the token to the destination
+                # The token addresses are the same on both chains according to erc20s.csv
+                dest_token = token  # Same address on BSC
+                
+                # Call wrap() on destination contract
                 nonce = _nonce(w3d, acct)
-
+                gas_price = _boosted_gas(w3d)
+                
+                # Estimate gas first
+                try:
+                    gas_estimate = dst.functions.wrap(
+                        dest_token,
+                        recipient,
+                        amount
+                    ).estimate_gas({'from': acct.address})
+                    gas_limit = int(gas_estimate * 1.2)  # Add 20% buffer
+                except:
+                    gas_limit = 300000  # Default if estimation fails
+                
                 tx = dst.functions.wrap(
-                    token,
+                    dest_token,
                     recipient,
                     amount
                 ).build_transaction({
-                    "from":     acct.address,
-                    "nonce":    nonce,
-                    "chainId":  w3d.eth.chain_id,
-                    "gas":      300000,
-                    "gasPrice": _boosted_gas(w3d),
+                    "from": acct.address,
+                    "nonce": nonce,
+                    "chainId": 97,  # BSC Testnet chain ID
+                    "gas": gas_limit,
+                    "gasPrice": gas_price,
                 })
-
+                
                 signed = w3d.eth.account.sign_transaction(tx, WARDEN_PRIVATE_KEY)
                 tx_hash = w3d.eth.send_raw_transaction(signed.rawTransaction)
                 print(f"Wrap transaction sent: {tx_hash.hex()}")
                 
                 # Wait for receipt
-                receipt = w3d.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
+                receipt = w3d.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
                 print(f"Wrap transaction confirmed in block {receipt.blockNumber}")
+                
+                # Small delay to avoid nonce issues
+                time.sleep(2)
                 
             except Exception as e:
                 print(f"Error processing individual deposit event: {e}")
@@ -168,6 +150,8 @@ def _scan_deposit(acct, w3s, w3d, src, dst):
                 
     except Exception as e:
         print(f"Error scanning for deposit events: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def _scan_unwrap(acct, w3s, w3d, src, dst):
@@ -175,45 +159,66 @@ def _scan_unwrap(acct, w3s, w3d, src, dst):
     Grader has sent an Unwrap on DESTINATION (BSC).
     Find Unwrap events and call withdraw() on SOURCE (Avalanche).
     """
+    print("Scanning for Unwrap events on destination chain...")
+    
     latest = w3d.eth.block_number
-    # Start from a reasonable recent block
-    from_block = max(0, latest - 100)  # Only scan last 100 blocks
+    # Scan from a block that's recent enough for the grader's transaction
+    from_block = max(0, latest - 50)  # Last 50 blocks should be enough
     
     try:
-        # Use batched scanning to avoid RPC limits
-        events = _scan_blocks_in_batches(w3d, dst, "Unwrap", from_block, latest)
+        # Get Unwrap events using get_logs method
+        events = dst.events.Unwrap.get_logs(fromBlock=from_block, toBlock=latest)
+        print(f"Found {len(events)} Unwrap events")
         
-        for log in events:
+        for event in events:
             try:
-                ev = dst.events.Unwrap().process_log(log)
-                underlying = _fix_addr(ev["args"]["underlying_token"])
-                to_addr    = _fix_addr(ev["args"]["to"])
-                amount     = int(ev["args"]["amount"])
-
-                print(f"Processing Unwrap: token={underlying}, recipient={to_addr}, amount={amount}")
-
-                # Call withdraw() on source
+                underlying = _fix_addr(event.args.underlying_token)
+                recipient = _fix_addr(event.args.to)
+                amount = event.args.amount
+                
+                print(f"Processing Unwrap: token={underlying}, recipient={recipient}, amount={amount}")
+                
+                # For the bridge, we need to send the token back to the source
+                # The token addresses are the same on both chains according to erc20s.csv
+                source_token = underlying  # Same address on Avalanche
+                
+                # Call withdraw() on source contract
                 nonce = _nonce(w3s, acct)
-
+                gas_price = _boosted_gas(w3s)
+                
+                # Estimate gas first
+                try:
+                    gas_estimate = src.functions.withdraw(
+                        source_token,
+                        recipient,
+                        amount
+                    ).estimate_gas({'from': acct.address})
+                    gas_limit = int(gas_estimate * 1.2)  # Add 20% buffer
+                except:
+                    gas_limit = 300000  # Default if estimation fails
+                
                 tx = src.functions.withdraw(
-                    underlying,
-                    to_addr,
+                    source_token,
+                    recipient,
                     amount
                 ).build_transaction({
-                    "from":     acct.address,
-                    "nonce":    nonce,
-                    "chainId":  w3s.eth.chain_id,
-                    "gas":      300000,
-                    "gasPrice": _boosted_gas(w3s),
+                    "from": acct.address,
+                    "nonce": nonce,
+                    "chainId": 43113,  # Avalanche Fuji chain ID
+                    "gas": gas_limit,
+                    "gasPrice": gas_price,
                 })
-
+                
                 signed = w3s.eth.account.sign_transaction(tx, WARDEN_PRIVATE_KEY)
                 tx_hash = w3s.eth.send_raw_transaction(signed.rawTransaction)
                 print(f"Withdraw transaction sent: {tx_hash.hex()}")
                 
                 # Wait for receipt
-                receipt = w3s.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
+                receipt = w3s.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
                 print(f"Withdraw transaction confirmed in block {receipt.blockNumber}")
+                
+                # Small delay to avoid nonce issues
+                time.sleep(2)
                 
             except Exception as e:
                 print(f"Error processing individual unwrap event: {e}")
@@ -221,6 +226,8 @@ def _scan_unwrap(acct, w3s, w3d, src, dst):
                 
     except Exception as e:
         print(f"Error scanning for unwrap events: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # ================== Autograder Entry ================== #
@@ -245,7 +252,9 @@ def scan_blocks(*args, **kwargs):
         print(f"Starting scan_blocks for {side} chain...")
         
         acct, w3s, w3d, src, dst = _load()
-        print(f"Loaded: Account={acct.address}, Source={src.address}, Dest={dst.address}")
+        print(f"Loaded: Account={acct.address}")
+        print(f"Source Contract={src.address}")
+        print(f"Destination Contract={dst.address}")
         
         if side == "source":
             _scan_deposit(acct, w3s, w3d, src, dst)
@@ -263,7 +272,11 @@ def scan_blocks(*args, **kwargs):
 # For testing purposes
 if __name__ == "__main__":
     # Test both sides
-    print("Testing source chain...")
+    print("=" * 60)
+    print("Bridge Listener - Testing")
+    print("=" * 60)
+    
+    print("\nTesting source chain...")
     scan_blocks("source")
     
     print("\nTesting destination chain...")
