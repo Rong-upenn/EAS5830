@@ -63,20 +63,21 @@ def _load_setup():
 
 
 def _handle_source_side(acct, w3_source, w3_dest, source_contract, dest_contract):
-    """
-    Grader deposited on SOURCE side (Avalanche),
-    so detect Deposit and call wrap() on DEST (BSC).
-    """
     latest = w3_source.eth.block_number
     from_block = max(latest - FROM_BLOCK_WINDOW, 0)
 
-    logs = source_contract.events.Deposit.get_logs(
+    # OLD (broken on Codio):
+    # logs = source_contract.events.Deposit.get_logs(fromBlock=from_block, toBlock="latest")
+
+    # NEW (Codio-compatible):
+    filter_obj = source_contract.events.Deposit.createFilter(
         fromBlock=from_block,
-        toBlock="latest",
+        toBlock='latest'
     )
+    logs = filter_obj.get_all_entries()
 
     if not logs:
-        return  # nothing to do
+        return
 
     nonce = w3_dest.eth.get_transaction_count(acct.address)
 
@@ -105,20 +106,21 @@ def _handle_source_side(acct, w3_source, w3_dest, source_contract, dest_contract
 
 
 def _handle_destination_side(acct, w3_source, w3_dest, source_contract, dest_contract):
-    """
-    Grader triggered Unwrap() on DEST (BSC),
-    so detect Unwrap and call withdraw() on SOURCE (Avalanche).
-    """
     latest = w3_dest.eth.block_number
     from_block = max(latest - FROM_BLOCK_WINDOW, 0)
 
-    logs = dest_contract.events.Unwrap.get_logs(
+    # OLD:
+    # logs = dest_contract.events.Unwrap.get_logs(fromBlock=from_block, toBlock="latest")
+
+    # NEW:
+    filter_obj = dest_contract.events.Unwrap.createFilter(
         fromBlock=from_block,
-        toBlock="latest",
+        toBlock='latest'
     )
+    logs = filter_obj.get_all_entries()
 
     if not logs:
-        return  # nothing to do
+        return
 
     nonce = w3_source.eth.get_transaction_count(acct.address)
 
@@ -144,6 +146,7 @@ def _handle_destination_side(acct, w3_source, w3_dest, source_contract, dest_con
         signed = w3_source.eth.account.sign_transaction(tx, private_key=WARDEN_PRIVATE_KEY)
         tx_hash = w3_source.eth.send_raw_transaction(signed.rawTransaction)
         w3_source.eth.wait_for_transaction_receipt(tx_hash)
+
 
 
 # ====================================================================
