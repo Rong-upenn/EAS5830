@@ -6,10 +6,27 @@ import json
 
 AVAX_RPC = "https://api.avax-test.network/ext/bc/C/rpc"
 BSC_RPC  = "https://data-seed-prebsc-1-s1.binance.org:8545/"
-
 FROM_BLOCK_WINDOW = 5000
 
-WARDEN_PRIVATE_KEY = "0x3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"  # <-- replace me
+WARDEN_PRIVATE_KEY = "0x3725983718607fcf85308c2fcae6315ee0012b7e9a6655595fa7618b7473d8ef"  # <-- fill this only
+
+
+def _fix_addr(addr):
+    """Ensure address is properly hex-prefixed and checksummed."""
+    if isinstance(addr, bytes):
+        addr = addr.hex()
+    addr = str(addr)
+    if not addr.startswith("0x"):
+        addr = "0x" + addr[-40:]
+    return Web3.to_checksum_address(addr)
+
+
+def _boosted_gas(w3):
+    return int(w3.eth.gas_price * 1.2)  # bump to avoid replacement underpriced
+
+
+def _nonce(w3, acct):
+    return w3.eth.get_transaction_count(acct.address)
 
 
 def _load():
@@ -21,6 +38,9 @@ def _load():
 
     w3s.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
     w3d.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+
+    if not w3s.is_connected() or not w3d.is_connected():
+        raise Exception("RPC connection failed")
 
     acct = Account.from_key(WARDEN_PRIVATE_KEY)
 
@@ -40,40 +60,35 @@ def _scan_deposit(acct, w3s, w3d, src, dst):
     latest = w3s.eth.block_number
     from_block = max(latest - FROM_BLOCK_WINDOW, 0)
 
-    # topic0 = keccak("Deposit(address,address,uint256)")
-    sig = Web3.keccak(text="Deposit(address,address,uint256)").hex()
+    topic0 = Web3.keccak(text="Deposit(address,address,uint256)").hex()
 
     flt = w3s.eth.filter({
         "fromBlock": from_block,
         "toBlock": "latest",
         "address": src.address,
-        "topics": [sig],
+        "topics": [topic0],
     })
 
     logs = flt.get_all_entries()
     if not logs:
         return
 
-    nonce = w3d.eth.get_transaction_count(acct.address)
-
     for log in logs:
         ev = src.events.Deposit().process_log(log)
-        token     = ev["args"]["token"]
-        recipient = ev["args"]["recipient"]
-        amount    = ev["args"]["amount"]
+        token     = _fix_addr(ev["args"]["token"])
+        recipient = _fix_addr(ev["args"]["recipient"])
+        amount    = int(ev["args"]["amount"])
 
-        tx = dst.functions.wrap(
-            Web3.to_checksum_address(token),
-            Web3.to_checksum_address(recipient),
-            amount
-        ).build_transaction({
+        # always refresh nonce to avoid "nonce too low"
+        nonce = _nonce(w3d, acct)
+
+        tx = dst.functions.wrap(token, recipient, amount).build_transaction({
             "from": acct.address,
             "nonce": nonce,
             "chainId": w3d.eth.chain_id,
             "gas": 300000,
-            "gasPrice": w3d.eth.gas_price,
+            "gasPrice": _boosted_gas(w3d),
         })
-        nonce += 1
 
         signed = w3d.eth.account.sign_transaction(tx, WARDEN_PRIVATE_KEY)
         w3d.eth.send_raw_transaction(signed.rawTransaction)
@@ -83,58 +98,49 @@ def _scan_unwrap(acct, w3s, w3d, src, dst):
     latest = w3d.eth.block_number
     from_block = max(latest - FROM_BLOCK_WINDOW, 0)
 
-    # topic0 = keccak("Unwrap(address,address,address,address,uint256)")
-    sig = Web3.keccak(text="Unwrap(address,address,address,address,uint256)").hex()
+    topic0 = Web3.keccak(text="Unwrap(address,address,address,address,uint256)").hex()
 
     flt = w3d.eth.filter({
         "fromBlock": from_block,
         "toBlock": "latest",
         "address": dst.address,
-        "topics": [sig],
+        "topics": [topic0],
     })
 
     logs = flt.get_all_entries()
     if not logs:
         return
 
-    nonce = w3s.eth.get_transaction_count(acct.address)
-
     for log in logs:
         ev = dst.events.Unwrap().process_log(log)
-        underlying = ev["args"]["underlying_token"]
-        to_addr    = ev["args"]["to"]
-        amount     = ev["args"]["amount"]
+        underlying = _fix_addr(ev["args"]["underlying_token"])
+        to_addr    = _fix_addr(ev["args"]["to"])
+        amount     = int(ev["args"]["amount"])
 
-        tx = src.functions.withdraw(
-            Web3.to_checksum_address(underlying),
-            Web3.to_checksum_address(to_addr),
-            amount
-        ).build_transaction({
+        nonce = _nonce(w3s, acct)
+
+        tx = src.functions.withdraw(underlying, to_addr, amount).build_transaction({
             "from": acct.address,
             "nonce": nonce,
             "chainId": w3s.eth.chain_id,
             "gas": 300000,
-            "gasPrice": w3s.eth.gas_price,
+            "gasPrice": _boosted_gas(w3s),
         })
-        nonce += 1
 
         signed = w3s.eth.account.sign_transaction(tx, WARDEN_PRIVATE_KEY)
         w3s.eth.send_raw_transaction(signed.rawTransaction)
 
 
-# ====================================================================
-# REQUIRED BY AUTOGRADER
-# ====================================================================
+# === REQUIRED ENTRYPOINT ===
 def scan_blocks(*args, **kwargs):
-    if not args:
+    side = args[0] if args else None
+    if not side or side not in ("source", "destination"):
         return
-    which = args[0]
 
     acct, w3s, w3d, src, dst = _load()
 
-    if which == "source":
+    if side == "source":
         _scan_deposit(acct, w3s, w3d, src, dst)
-    elif which == "destination":
+
+    elif side == "destination":
         _scan_unwrap(acct, w3s, w3d, src, dst)
-    else:
-        raise ValueError("scan_blocks requires 'source' or 'destination'")
