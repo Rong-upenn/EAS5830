@@ -89,14 +89,16 @@ def _load():
 
 def _scan_deposit(acct, w3s, w3d, src, dst):
     latest = w3s.eth.block_number
-    MAX_RANGE = 2048
-    from_block = max(latest - MAX_RANGE, 0)
+
+    from_block = latest - 2048
+    if from_block < 0:
+        from_block = 0
 
     topic0 = topic("Deposit(address,address,uint256)")
 
     flt = w3s.eth.filter({
         "fromBlock": from_block,
-        "toBlock": "latest",
+        "toBlock": latest,    # <-- FIXED
         "address": src.address,
         "topics": [topic0],
     })
@@ -131,16 +133,19 @@ def _scan_deposit(acct, w3s, w3d, src, dst):
 
 
 
+
 def _scan_unwrap(acct, w3s, w3d, src, dst):
     latest = w3d.eth.block_number
-    MAX_RANGE = 2048
-    from_block = max(latest - MAX_RANGE, 0)
+
+    from_block = latest - 2048
+    if from_block < 0:
+        from_block = 0
 
     topic0 = topic("Unwrap(address,address,address,address,uint256)")
 
     flt = w3d.eth.filter({
         "fromBlock": from_block,
-        "toBlock": "latest",
+        "toBlock": latest,    # <-- FIXED
         "address": dst.address,
         "topics": [topic0],
     })
@@ -172,6 +177,7 @@ def _scan_unwrap(acct, w3s, w3d, src, dst):
 
         signed = w3s.eth.account.sign_transaction(tx, WARDEN_PRIVATE_KEY)
         w3s.eth.send_raw_transaction(signed.rawTransaction)
+
 
 
 
